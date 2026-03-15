@@ -30,6 +30,7 @@
 #include "colmap/scene/camera.h"
 
 #include "colmap/sensor/models.h"
+#include "colmap/sensor/models_refrac.h"
 
 #include <gtest/gtest.h>
 
@@ -41,7 +42,9 @@ TEST(Camera, Empty) {
   EXPECT_EQ(camera.camera_id, kInvalidCameraId);
   EXPECT_EQ(camera.SensorId(), sensor_t(SensorType::CAMERA, kInvalidCameraId));
   EXPECT_EQ(camera.model_id, CameraModelId::kInvalid);
+  EXPECT_EQ(camera.refrac_model_id, CameraRefracModelId::kInvalid);
   EXPECT_EQ(camera.ModelName(), "");
+  EXPECT_EQ(camera.RefracModelName(), "");
   EXPECT_EQ(camera.width, 0);
   EXPECT_EQ(camera.height, 0);
   EXPECT_FALSE(camera.has_prior_focal_length);
@@ -62,6 +65,9 @@ TEST(Camera, Equals) {
   EXPECT_NE(camera, other);
   other.SetFocalLength(2.);
   EXPECT_EQ(camera, other);
+  camera.refrac_model_id = CameraRefracModelId::kFlatPort;
+  camera.refrac_params = {0.0, 0.0, 1.0, 0.05, 0.007, 1.0, 1.49, 1.333};
+  EXPECT_NE(camera, other);
 }
 
 TEST(Camera, Print) {
@@ -160,6 +166,14 @@ TEST(Camera, ParamsToString) {
   EXPECT_EQ(camera.ParamsToString(), "1, 0.5, 0.5");
 }
 
+TEST(Camera, RefracParamsToString) {
+  Camera camera = Camera::CreateFromModelId(
+      1, SimplePinholeCameraModel::model_id, 1.0, 1, 1);
+  camera.refrac_model_id = CameraRefracModelId::kFlatPort;
+  camera.refrac_params = {0.0, 0.0, 1.0, 0.05, 0.007, 1.0, 1.49, 1.333};
+  EXPECT_EQ(camera.RefracParamsToString(), "0, 0, 1, 0.05, 0.007, 1, 1.49, 1.333");
+}
+
 TEST(Camera, ParamsFromString) {
   Camera camera;
   camera.model_id = SimplePinholeCameraModel::model_id;
@@ -178,6 +192,32 @@ TEST(Camera, VerifyParams) {
   EXPECT_TRUE(camera.VerifyParams());
   camera.params.resize(2);
   EXPECT_FALSE(camera.VerifyParams());
+}
+
+TEST(Camera, VerifyRefracParams) {
+  Camera camera = Camera::CreateFromModelId(
+      1, SimplePinholeCameraModel::model_id, 1.0, 1, 1);
+  EXPECT_TRUE(camera.VerifyRefracParams());
+  camera.refrac_model_id = CameraRefracModelId::kFlatPort;
+  camera.refrac_params = {0.0, 0.0, 1.0, 0.05, 0.007, 1.0, 1.49, 1.333};
+  EXPECT_TRUE(camera.VerifyRefracParams());
+  camera.refrac_params.pop_back();
+  EXPECT_FALSE(camera.VerifyRefracParams());
+}
+
+TEST(Camera, RefractiveProjectionRoundTrip) {
+  Camera camera = Camera::CreateFromModelId(
+      1, SimplePinholeCameraModel::model_id, 1000.0, 1280, 960);
+  camera.refrac_model_id = CameraRefracModelId::kFlatPort;
+  camera.refrac_params = {0.0, 0.0, 1.0, 0.05, 0.007, 1.0, 1.49, 1.333};
+  const Eigen::Vector3d point(0.1, -0.05, 2.0);
+  const auto xy = camera.ImgFromCamRefrac(point);
+  ASSERT_TRUE(xy.has_value());
+  const auto point_rt = camera.CamFromImgRefracPoint(*xy, point.norm());
+  ASSERT_TRUE(point_rt.has_value());
+  EXPECT_NEAR(point_rt->x(), point.x(), 1e-5);
+  EXPECT_NEAR(point_rt->y(), point.y(), 1e-5);
+  EXPECT_NEAR(point_rt->z(), point.z(), 1e-5);
 }
 
 TEST(Camera, IsUndistorted) {

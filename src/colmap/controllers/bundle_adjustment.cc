@@ -101,7 +101,7 @@ void BundleAdjustmentController::Run() {
   std::unique_ptr<BundleAdjuster> bundle_adjuster =
       CreateDefaultBundleAdjuster(ba_options, ba_config, *reconstruction_);
   bundle_adjuster->Solve();
-  reconstruction_->UpdatePoint3DErrors();
+  reconstruction_->UpdatePoint3DErrors(ba_options.enable_refraction);
 
   run_timer.PrintMinutes();
 }

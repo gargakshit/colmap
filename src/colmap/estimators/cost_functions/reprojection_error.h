@@ -32,6 +32,8 @@
 #include "colmap/estimators/cost_functions/utils.h"
 #include "colmap/geometry/rigid3.h"
 #include "colmap/sensor/models.h"
+#include "colmap/sensor/models_refrac.h"
+#include "colmap/util/logging.h"
 
 #include <Eigen/Core>
 #include <ceres/ceres.h>
@@ -366,6 +368,108 @@ class RigReprojErrorConstantRigCostFunctor
   const RigReprojErrorCostFunctor<CameraModel> reproj_cost_;
 };
 
+template <typename CameraRefracModel, typename CameraModel>
+class ReprojErrorRefracCostFunctor
+    : public AutoDiffCostFunctor<
+          ReprojErrorRefracCostFunctor<CameraRefracModel, CameraModel>,
+          2,
+          3,
+          7,
+          CameraModel::num_params,
+          CameraRefracModel::num_params> {
+ public:
+  explicit ReprojErrorRefracCostFunctor(const Eigen::Vector2d& point2D)
+      : point2D_(point2D) {}
+
+  static ceres::CostFunction* Create(const Eigen::Vector2d& point2D) {
+    return new ceres::NumericDiffCostFunction<
+        ReprojErrorRefracCostFunctor,
+        ceres::CENTRAL,
+        2,
+        3,
+        7,
+        CameraModel::num_params,
+        CameraRefracModel::num_params>(
+        new ReprojErrorRefracCostFunctor(point2D));
+  }
+
+  template <typename T>
+  bool operator()(const T* const point3D_in_world,
+                  const T* const cam_from_world,
+                  const T* const camera_params,
+                  const T* const refrac_params,
+                  T* residuals) const {
+    const Eigen::Matrix<T, 3, 1> point3D_in_cam =
+        EigenQuaternionMap<T>(cam_from_world) *
+            EigenVector3Map<T>(point3D_in_world) +
+        EigenVector3Map<T>(cam_from_world + 4);
+
+    Eigen::Map<Eigen::Matrix<T, 2, 1>> residuals_vec(residuals);
+    Eigen::Matrix<T, 2, 1> proj;
+    if (CameraRefracModel::template ImgFromCam<CameraModel>(camera_params,
+                                                            refrac_params,
+                                                            point3D_in_cam.x(),
+                                                            point3D_in_cam.y(),
+                                                            point3D_in_cam.z(),
+                                                            &proj.x(),
+                                                            &proj.y())) {
+      residuals_vec = proj - point2D_.cast<T>();
+    } else {
+      residuals_vec.setZero();
+    }
+    return true;
+  }
+
+ private:
+  const Eigen::Vector2d point2D_;
+};
+
+template <typename CameraRefracModel, typename CameraModel>
+class ReprojErrorRefracConstantPoseCostFunctor
+    : public AutoDiffCostFunctor<
+          ReprojErrorRefracConstantPoseCostFunctor<CameraRefracModel,
+                                                  CameraModel>,
+          2,
+          3,
+          CameraModel::num_params,
+          CameraRefracModel::num_params> {
+ public:
+  ReprojErrorRefracConstantPoseCostFunctor(const Eigen::Vector2d& point2D,
+                                           const Rigid3d& cam_from_world)
+      : cam_from_world_(cam_from_world), reproj_cost_(point2D) {}
+
+  static ceres::CostFunction* Create(const Eigen::Vector2d& point2D,
+                                     const Rigid3d& cam_from_world) {
+    return new ceres::NumericDiffCostFunction<
+        ReprojErrorRefracConstantPoseCostFunctor,
+        ceres::CENTRAL,
+        2,
+        3,
+        CameraModel::num_params,
+        CameraRefracModel::num_params>(
+        new ReprojErrorRefracConstantPoseCostFunctor(point2D, cam_from_world));
+  }
+
+  template <typename T>
+  bool operator()(const T* const point3D_in_world,
+                  const T* const camera_params,
+                  const T* const refrac_params,
+                  T* residuals) const {
+    const Eigen::Matrix<T, 7, 1> cam_from_world =
+        cam_from_world_.params.cast<T>();
+    return reproj_cost_(point3D_in_world,
+                        cam_from_world.data(),
+                        camera_params,
+                        refrac_params,
+                        residuals);
+  }
+
+ private:
+  const Rigid3d cam_from_world_;
+  const ReprojErrorRefracCostFunctor<CameraRefracModel, CameraModel>
+      reproj_cost_;
+};
+
 template <template <typename> class CostFunctor, typename... Args>
 ceres::CostFunction* CreateCameraCostFunction(
     const CameraModelId camera_model_id, Args&&... args) {
@@ -387,6 +491,28 @@ ceres::CostFunction* CreateCameraCostFunction(
 
 #undef CAMERA_MODEL_CASE
   }
+  // NOLINTEND(bugprone-macro-parentheses)
+}
+
+template <template <typename, typename> class CostFunctor, typename... Args>
+ceres::CostFunction* CreateCameraRefracCostFunction(
+    const CameraModelId camera_model_id,
+    const CameraRefracModelId refrac_model_id,
+    Args&&... args) {
+  // NOLINTBEGIN(bugprone-macro-parentheses)
+#define CAMERA_COMBINATION_MODEL_CASE(CameraRefracModel, CameraModel)          \
+  if (camera_model_id == CameraModel::model_id &&                              \
+      refrac_model_id == CameraRefracModel::refrac_model_id) {                \
+    return CostFunctor<CameraRefracModel, CameraModel>::Create(               \
+        std::forward<Args>(args)...);                                         \
+  } else
+
+  CAMERA_COMBINATION_MODEL_CASES {
+    LOG(FATAL_THROW) << "Camera/refractive model combination is not supported";
+    return nullptr;
+  }
+
+#undef CAMERA_COMBINATION_MODEL_CASE
   // NOLINTEND(bugprone-macro-parentheses)
 }
 

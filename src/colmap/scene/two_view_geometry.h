@@ -47,6 +47,8 @@ struct TwoViewGeometry {
     CALIBRATED = 2,
     // Relative pose (metric) from calibrated (non-panoramic) rig.
     CALIBRATED_RIG = 9,
+    // Refractive relative pose from refractive cameras.
+    REFRACTIVE = 10,
     // Fundamental matrix.
     UNCALIBRATED = 3,
     // Homography, planar scene with baseline.

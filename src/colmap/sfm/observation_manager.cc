@@ -280,10 +280,15 @@ point3D_t ObservationManager::MergePoints3D(const point3D_t point3D_id1,
 size_t ObservationManager::FilterPoints3D(
     const double max_reproj_error,
     const double min_tri_angle,
-    const std::unordered_set<point3D_t>& point3D_ids) {
+    const std::unordered_set<point3D_t>& point3D_ids,
+    const bool enable_refraction) {
   size_t num_filtered_observations = 0;
   num_filtered_observations +=
-      FilterPoints3DWithLargeReprojectionError(max_reproj_error, point3D_ids);
+      FilterPoints3DWithLargeReprojectionError(
+          max_reproj_error,
+          point3D_ids,
+          ReprojectionErrorType::PIXEL,
+          enable_refraction);
   num_filtered_observations +=
       FilterPoints3DWithSmallTriangulationAngle(min_tri_angle, point3D_ids);
   return num_filtered_observations;
@@ -292,7 +297,8 @@ size_t ObservationManager::FilterPoints3D(
 size_t ObservationManager::FilterPoints3DInImages(
     const double max_reproj_error,
     const double min_tri_angle,
-    const std::unordered_set<image_t>& image_ids) {
+    const std::unordered_set<image_t>& image_ids,
+    const bool enable_refraction) {
   std::unordered_set<point3D_t> point3D_ids;
   for (const image_t image_id : image_ids) {
     const Image& image = reconstruction_.Image(image_id);
@@ -302,11 +308,13 @@ size_t ObservationManager::FilterPoints3DInImages(
       }
     }
   }
-  return FilterPoints3D(max_reproj_error, min_tri_angle, point3D_ids);
+  return FilterPoints3D(
+      max_reproj_error, min_tri_angle, point3D_ids, enable_refraction);
 }
 
 size_t ObservationManager::FilterAllPoints3D(const double max_reproj_error,
-                                             const double min_tri_angle) {
+                                             const double min_tri_angle,
+                                             const bool enable_refraction) {
   // Important: First filter observations and points with large reprojection
   // error, so that observations with large reprojection error do not make
   // a point stable through a large triangulation angle.
@@ -314,7 +322,11 @@ size_t ObservationManager::FilterAllPoints3D(const double max_reproj_error,
       reconstruction_.Point3DIds();
   size_t num_filtered_observations = 0;
   num_filtered_observations +=
-      FilterPoints3DWithLargeReprojectionError(max_reproj_error, point3D_ids);
+      FilterPoints3DWithLargeReprojectionError(
+          max_reproj_error,
+          point3D_ids,
+          ReprojectionErrorType::PIXEL,
+          enable_refraction);
   num_filtered_observations +=
       FilterPoints3DWithSmallTriangulationAngle(min_tri_angle, point3D_ids);
   return num_filtered_observations;
@@ -423,7 +435,8 @@ size_t ObservationManager::FilterPoints3DWithSmallTriangulationAngle(
 size_t ObservationManager::FilterPoints3DWithLargeReprojectionError(
     const double max_error,
     const std::unordered_set<point3D_t>& point3D_ids,
-    const ReprojectionErrorType error_type) {
+    const ReprojectionErrorType error_type,
+    const bool enable_refraction) {
   size_t num_filtered_observations = 0;
 
   // Precompute squared/converted thresholds to avoid redundant computations.
@@ -457,7 +470,11 @@ size_t ObservationManager::FilterPoints3DWithLargeReprojectionError(
       switch (error_type) {
         case ReprojectionErrorType::PIXEL: {
           const double squared_error = CalculateSquaredReprojectionError(
-              point2D.xy, point3D.xyz, image.CamFromWorld(), camera);
+              point2D.xy,
+              point3D.xyz,
+              image.CamFromWorld(),
+              camera,
+              enable_refraction);
           should_filter = squared_error > max_squared_error;
           observation_error = std::sqrt(squared_error);
           break;

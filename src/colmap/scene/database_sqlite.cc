@@ -28,6 +28,7 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 #include "colmap/scene/database.h"
+#include "colmap/sensor/models_refrac.h"
 #include "colmap/util/endian.h"
 #include "colmap/util/string.h"
 #include "colmap/util/version.h"
@@ -344,6 +345,23 @@ Camera ReadCameraRow(sqlite3_stmt* sql_stmt) {
       camera.params.data(), sqlite3_column_blob(sql_stmt, 4), num_params_bytes);
 
   camera.has_prior_focal_length = sqlite3_column_int64(sql_stmt, 5) != 0;
+
+  if (sqlite3_column_type(sql_stmt, 6) != SQLITE_NULL) {
+    camera.refrac_model_id =
+        static_cast<CameraRefracModelId>(sqlite3_column_int64(sql_stmt, 6));
+  }
+
+  if (sqlite3_column_type(sql_stmt, 7) != SQLITE_NULL) {
+    const size_t num_refrac_params_bytes =
+        static_cast<size_t>(sqlite3_column_bytes(sql_stmt, 7));
+    const size_t num_refrac_params = num_refrac_params_bytes / sizeof(double);
+    THROW_CHECK_EQ(num_refrac_params,
+                   CameraRefracModelNumParams(camera.refrac_model_id));
+    camera.refrac_params.resize(num_refrac_params, 0.);
+    std::memcpy(camera.refrac_params.data(),
+                sqlite3_column_blob(sql_stmt, 7),
+                num_refrac_params_bytes);
+  }
 
   return camera;
 }
@@ -1162,6 +1180,23 @@ class SqliteDatabase : public Database {
     SQLITE3_CALL(sqlite3_bind_int64(
         sql_stmt_write_camera_, 6, camera.has_prior_focal_length));
 
+    SQLITE3_CALL(sqlite3_bind_int64(
+        sql_stmt_write_camera_,
+        7,
+        static_cast<sqlite3_int64>(camera.refrac_model_id)));
+
+    if (!camera.refrac_params.empty()) {
+      const size_t num_refrac_params_bytes =
+          sizeof(double) * camera.refrac_params.size();
+      SQLITE3_CALL(sqlite3_bind_blob(sql_stmt_write_camera_,
+                                     8,
+                                     camera.refrac_params.data(),
+                                     static_cast<int>(num_refrac_params_bytes),
+                                     SQLITE_STATIC));
+    } else {
+      SQLITE3_CALL(sqlite3_bind_null(sql_stmt_write_camera_, 8));
+    }
+
     SQLITE3_CALL(sqlite3_step(sql_stmt_write_camera_));
 
     return static_cast<camera_t>(
@@ -1437,7 +1472,24 @@ class SqliteDatabase : public Database {
         sql_stmt_update_camera_, 5, camera.has_prior_focal_length));
 
     SQLITE3_CALL(
-        sqlite3_bind_int64(sql_stmt_update_camera_, 6, camera.camera_id));
+        sqlite3_bind_int64(sql_stmt_update_camera_,
+                           6,
+                           static_cast<sqlite3_int64>(camera.refrac_model_id)));
+
+    if (!camera.refrac_params.empty()) {
+      const size_t num_refrac_params_bytes =
+          sizeof(double) * camera.refrac_params.size();
+      SQLITE3_CALL(sqlite3_bind_blob(sql_stmt_update_camera_,
+                                     7,
+                                     camera.refrac_params.data(),
+                                     static_cast<int>(num_refrac_params_bytes),
+                                     SQLITE_STATIC));
+    } else {
+      SQLITE3_CALL(sqlite3_bind_null(sql_stmt_update_camera_, 7));
+    }
+
+    SQLITE3_CALL(
+        sqlite3_bind_int64(sql_stmt_update_camera_, 8, camera.camera_id));
 
     SQLITE3_CALL(sqlite3_step(sql_stmt_update_camera_));
   }
@@ -1696,7 +1748,8 @@ class SqliteDatabase : public Database {
         &sql_stmt_update_rig_);
     prepare_sql_stmt(
         "UPDATE cameras SET model=?, width=?, height=?, params=?, "
-        "prior_focal_length=? WHERE camera_id=?;",
+        "prior_focal_length=?, refrac_model=?, refrac_params=? "
+        "WHERE camera_id=?;",
         &sql_stmt_update_camera_);
     prepare_sql_stmt("UPDATE frames SET rig_id=? WHERE frame_id=?;",
                      &sql_stmt_update_frame_);
@@ -1824,7 +1877,8 @@ class SqliteDatabase : public Database {
         &sql_stmt_write_rig_sensor_);
     prepare_sql_stmt(
         "INSERT INTO cameras(camera_id, model, width, height, params, "
-        "prior_focal_length) VALUES(?, ?, ?, ?, ?, ?);",
+        "prior_focal_length, refrac_model, refrac_params) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?);",
         &sql_stmt_write_camera_);
     prepare_sql_stmt("INSERT INTO frames(frame_id, rig_id) VALUES(?, ?);",
                      &sql_stmt_write_frame_);
@@ -1942,7 +1996,10 @@ class SqliteDatabase : public Database {
         "    height               INTEGER                             NOT NULL,"
         "    params               BLOB,"
         "    prior_focal_length   INTEGER                             NOT "
-        "NULL);";
+        "NULL,"
+        "    refrac_model         INTEGER                             DEFAULT "
+        "-1,"
+        "    refrac_params        BLOB);";
 
     SQLITE3_EXEC(database_, sql.c_str(), nullptr);
   }
@@ -2241,6 +2298,18 @@ class SqliteDatabase : public Database {
                          .c_str(),
                      nullptr);
       }
+    }
+
+    if (!ExistsColumn("cameras", "refrac_model")) {
+      SQLITE3_EXEC(
+          database_,
+          "ALTER TABLE cameras ADD COLUMN refrac_model INTEGER DEFAULT -1;",
+          nullptr);
+    }
+    if (!ExistsColumn("cameras", "refrac_params")) {
+      SQLITE3_EXEC(database_,
+                   "ALTER TABLE cameras ADD COLUMN refrac_params BLOB;",
+                   nullptr);
     }
 
     if (ExistsTable("pose_priors_old")) {

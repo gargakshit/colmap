@@ -382,9 +382,14 @@ bool CalibrateViewGraph(const ViewGraphCalibrationOptions& options,
     const auto [image_id1, image_id2] = PairIdToImagePair(pair_id);
     const Camera& camera1 = *image_id_to_camera.at(image_id1);
     const Camera& camera2 = *image_id_to_camera.at(image_id2);
+    Rigid3d cam2_from_cam1 = *tvg.cam2_from_cam1;
+    const double translation_norm = cam2_from_cam1.translation().norm();
+    if (translation_norm > 1e-12) {
+      cam2_from_cam1.translation() /= translation_norm;
+    }
     tvg.F = FundamentalFromEssentialMatrix(
         camera2.CalibrationMatrix(),
-        EssentialMatrixFromPose(*tvg.cam2_from_cam1),
+        EssentialMatrixFromPose(cam2_from_cam1),
         camera1.CalibrationMatrix());
   }
 

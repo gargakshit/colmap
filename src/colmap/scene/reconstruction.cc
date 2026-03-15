@@ -944,7 +944,7 @@ double Reconstruction::ComputeMeanReprojectionError() const {
   }
 }
 
-void Reconstruction::UpdatePoint3DErrors() {
+void Reconstruction::UpdatePoint3DErrors(const bool is_refractive) {
   for (auto& [_, point3D] : points3D_) {
     if (point3D.track.Length() == 0) {
       point3D.error = 0;
@@ -956,7 +956,7 @@ void Reconstruction::UpdatePoint3DErrors() {
       const auto& point2D = image.Point2D(track_el.point2D_idx);
       const auto& camera = *image.CameraPtr();
       point3D.error += std::sqrt(CalculateSquaredReprojectionError(
-          point2D.xy, point3D.xyz, image.CamFromWorld(), camera));
+          point2D.xy, point3D.xyz, image.CamFromWorld(), camera, is_refractive));
     }
     point3D.error /= point3D.track.Length();
   }

@@ -51,6 +51,7 @@ class FeatureExtractionWidget : public QWidget {
   QGroupBox* CreateCameraModelBox();
 
   void SelectCameraModel(int code);
+  void SelectCameraRefracModel(int code);
   void Extract();
 
   QWidget* parent_;
@@ -58,14 +59,18 @@ class FeatureExtractionWidget : public QWidget {
   OptionManager* options_;
 
   QComboBox* camera_model_cb_;
+  QComboBox* camera_refrac_model_cb_;
   QCheckBox* single_camera_cb_;
   QCheckBox* single_camera_per_folder_cb_;
   QRadioButton* camera_params_exif_rb_;
   QRadioButton* camera_params_custom_rb_;
   QLabel* camera_params_info_;
+  QLabel* camera_refrac_params_info_;
   QLineEdit* camera_params_text_;
+  QLineEdit* camera_refrac_params_text_;
 
   std::vector<int> camera_model_ids_;
+  std::vector<int> camera_refrac_model_ids_;
 
   QTabWidget* tab_widget_;
 };

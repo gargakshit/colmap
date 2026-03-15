@@ -153,9 +153,10 @@ class VisualIndex {
   virtual void Write(const std::filesystem::path& path) const = 0;
 
  protected:
-  virtual void ReadFromFaiss(const std::filesystem::path& path,
-                             long offset,
-                             FeatureExtractorType feature_type) = 0;
+  virtual void ReadFromFile(const std::filesystem::path& path,
+                            long offset,
+                            int file_version,
+                            FeatureExtractorType feature_type) = 0;
 };
 
 std::ostream& operator<<(std::ostream& stream, const VisualIndex& visual_index);

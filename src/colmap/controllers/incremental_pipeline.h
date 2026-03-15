@@ -94,6 +94,10 @@ struct IncrementalPipelineOptions {
   // PRNG seed for all stochastic methods during reconstruction.
   int random_seed = -1;
 
+  // Whether to enable refractive geometry in the sparse pipeline when
+  // refractive cameras are present.
+  bool enable_refraction = false;
+
   // Thresholds for filtering images with degenerate intrinsics.
   double min_focal_length_ratio = 0.1;
   double max_focal_length_ratio = 10.0;
@@ -103,6 +107,7 @@ struct IncrementalPipelineOptions {
   bool ba_refine_focal_length = true;
   bool ba_refine_principal_point = false;
   bool ba_refine_extra_params = true;
+  bool ba_refine_refrac_params = false;
 
   // Whether to optimize rig poses during the reconstruction.
   bool ba_refine_sensor_from_rig = true;

@@ -30,6 +30,7 @@
 #include "colmap/controllers/image_reader.h"
 
 #include "colmap/sensor/models.h"
+#include "colmap/sensor/models_refrac.h"
 #include "colmap/util/file.h"
 #include "colmap/util/misc.h"
 
@@ -42,6 +43,14 @@ bool ImageReaderOptions::Check() const {
   if (!camera_params.empty()) {
     CHECK_OPTION(
         CameraModelVerifyParams(model_id, CSVToVector<double>(camera_params)));
+  }
+  if (camera_refrac_model != "NONE") {
+    CHECK_OPTION(ExistsCameraRefracModelWithName(camera_refrac_model));
+    CHECK_OPTION(!camera_refrac_params.empty());
+    const CameraRefracModelId refrac_model_id =
+        CameraRefracModelNameToId(camera_refrac_model);
+    CHECK_OPTION(CameraRefracModelVerifyParams(
+        refrac_model_id, CSVToVector<double>(camera_refrac_params)));
   }
   return true;
 }
@@ -87,6 +96,16 @@ ImageReader::ImageReader(const ImageReaderOptions& options, Database* database)
     if (!options_.camera_params.empty()) {
       THROW_CHECK(prev_camera_.SetParamsFromString(options_.camera_params));
       prev_camera_.has_prior_focal_length = true;
+    }
+    if (options_.camera_refrac_model != "NONE") {
+      prev_camera_.refrac_model_id =
+          CameraRefracModelNameToId(options_.camera_refrac_model);
+      prev_camera_.refrac_params.resize(
+          CameraRefracModelNumParams(prev_camera_.refrac_model_id), 0.);
+      if (!options_.camera_refrac_params.empty()) {
+        THROW_CHECK(
+            prev_camera_.SetRefracParamsFromString(options_.camera_refrac_params));
+      }
     }
   }
 }
@@ -254,6 +273,7 @@ ImageReader::Status ImageReader::Next(Rig* rig,
           camera_model_to_id_.count(camera_model.value()) == 0)) ||
         (options_.single_camera_per_folder &&
          image_folders_.count(image_folder) == 0)) {
+      Camera prev_camera_cache = prev_camera_;
       if (options_.camera_params.empty()) {
         // Extract focal length.
         const std::optional<double> maybe_focal_length =
@@ -268,12 +288,20 @@ ImageReader::Status ImageReader::Next(Rig* rig,
                                                  bitmap->Width(),
                                                  bitmap->Height());
         prev_camera_.has_prior_focal_length = maybe_focal_length.has_value();
+        if (options_.camera_refrac_model != "NONE") {
+          prev_camera_.refrac_model_id = prev_camera_cache.refrac_model_id;
+          prev_camera_.refrac_params = prev_camera_cache.refrac_params;
+        }
       }
 
       prev_camera_.width = static_cast<size_t>(bitmap->Width());
       prev_camera_.height = static_cast<size_t>(bitmap->Height());
 
       if (!prev_camera_.VerifyParams()) {
+        return Status::CAMERA_PARAM_ERROR;
+      }
+      if (options_.camera_refrac_model != "NONE" &&
+          !prev_camera_.VerifyRefracParams()) {
         return Status::CAMERA_PARAM_ERROR;
       }
 

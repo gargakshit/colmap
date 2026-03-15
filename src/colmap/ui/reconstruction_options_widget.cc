@@ -92,6 +92,7 @@ class MapperRegistrationOptionsWidget : public OptionsWidget {
                  "abs_pose_min_num_inliers");
     AddOptionDouble(&options->mapper->mapper.abs_pose_min_inlier_ratio,
                     "abs_pose_min_inlier_ratio");
+    AddOptionBool(&options->mapper->enable_refraction, "enable_refraction");
     AddOptionInt(&options->mapper->mapper.max_reg_trials, "max_reg_trials", 1);
     AddOptionBool(&options->mapper->structure_less_registration_fallback,
                   "structure_less_registration_fallback");
@@ -136,6 +137,8 @@ class MapperBundleAdjustmentOptionsWidget : public OptionsWidget {
                   "refine_principal_point");
     AddOptionBool(&options->mapper->ba_refine_extra_params,
                   "refine_extra_params");
+    AddOptionBool(&options->mapper->ba_refine_refrac_params,
+                  "refine_refrac_params");
     AddOptionBool(&options->mapper->ba_refine_sensor_from_rig,
                   "refine_sensor_from_rig");
 

@@ -36,6 +36,8 @@ COLMAP_ADD_LIBRARY(
         bitmap.h bitmap.cc
         database.h database.cc
         models.h models.cc
+        models_refrac.h models_refrac.cc
+        ray3d.h ray3d.cc
         rig.h rig.cc
         specs.h specs.cc
     PUBLIC_LINK_LIBS
@@ -64,6 +66,16 @@ COLMAP_ADD_TEST(
 COLMAP_ADD_TEST(
     NAME models_test
     SRCS models_test.cc
+    LINK_LIBS colmap_sensor
+)
+COLMAP_ADD_TEST(
+    NAME models_refrac_test
+    SRCS models_refrac_test.cc
+    LINK_LIBS colmap_sensor
+)
+COLMAP_ADD_TEST(
+    NAME ray3d_test
+    SRCS ray3d_test.cc
     LINK_LIBS colmap_sensor
 )
 COLMAP_ADD_TEST(

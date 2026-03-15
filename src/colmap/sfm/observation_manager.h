@@ -97,11 +97,15 @@ class ObservationManager {
   // @return                    The number of filtered observations.
   size_t FilterPoints3D(double max_reproj_error,
                         double min_tri_angle,
-                        const std::unordered_set<point3D_t>& point3D_ids);
+                        const std::unordered_set<point3D_t>& point3D_ids,
+                        bool enable_refraction = false);
   size_t FilterPoints3DInImages(double max_reproj_error,
                                 double min_tri_angle,
-                                const std::unordered_set<image_t>& image_ids);
-  size_t FilterAllPoints3D(double max_reproj_error, double min_tri_angle);
+                                const std::unordered_set<image_t>& image_ids,
+                                bool enable_refraction = false);
+  size_t FilterAllPoints3D(double max_reproj_error,
+                           double min_tri_angle,
+                           bool enable_refraction = false);
 
   // Filter points with track length below threshold.
   //
@@ -130,7 +134,8 @@ class ObservationManager {
   size_t FilterPoints3DWithLargeReprojectionError(
       double max_error,
       const std::unordered_set<point3D_t>& point3D_ids,
-      ReprojectionErrorType error_type = ReprojectionErrorType::PIXEL);
+      ReprojectionErrorType error_type = ReprojectionErrorType::PIXEL,
+      bool enable_refraction = false);
 
   // Filter frames without observations or bogus camera parameters.
   //

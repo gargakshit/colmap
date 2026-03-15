@@ -31,58 +31,21 @@
 
 #include "colmap/util/logging.h"
 
-#include <faiss/IndexFlat.h>
-#include <faiss/IndexIVFFlat.h>
-#include <faiss/IndexIVFPQ.h>
-#include <faiss/IndexPQ.h>
-#include <omp.h>
+#include <algorithm>
+#include <limits>
+#include <numeric>
+#include <utility>
 
 namespace colmap {
 namespace {
 
-class FaissFeatureDescriptorIndex : public FeatureDescriptorIndex {
+class ExactFeatureDescriptorIndex : public FeatureDescriptorIndex {
  public:
-  explicit FaissFeatureDescriptorIndex(int num_threads)
-      : num_threads_(num_threads) {}
+  explicit ExactFeatureDescriptorIndex(int /*num_threads*/) {}
 
   void Build(const FeatureDescriptorsFloat& index_descriptors) override {
     type_ = index_descriptors.type;
-    if (index_descriptors.data.rows() == 0) {
-      index_ = nullptr;
-      return;
-    }
-
-#pragma omp parallel num_threads(1)
-    {
-      omp_set_num_threads(num_threads_);
-#ifdef _MSC_VER
-      omp_set_nested(1);
-#else
-      omp_set_max_active_levels(1);
-#endif
-
-      if (index_descriptors.data.rows() >= 512) {
-        const int num_centroids = 4 * std::sqrt(index_descriptors.data.rows());
-        coarse_quantizer_ =
-            std::make_unique<faiss::IndexFlatL2>(index_descriptors.data.cols());
-        index_ = std::make_unique<faiss::IndexIVFFlat>(
-            /*quantizer=*/coarse_quantizer_.get(),
-            /*d=*/index_descriptors.data.cols(),
-            /*nlist_=*/num_centroids);
-        auto* index_impl = dynamic_cast<faiss::IndexIVFFlat*>(index_.get());
-        // Avoid warnings during the training phase.
-        index_impl->cp.min_points_per_centroid = 1;
-        index_->train(index_descriptors.data.rows(),
-                      index_descriptors.data.data());
-        index_->add(index_descriptors.data.rows(),
-                    index_descriptors.data.data());
-      } else {
-        index_ = std::make_unique<faiss::IndexFlatL2>(
-            /*d=*/index_descriptors.data.cols());
-        index_->add(index_descriptors.data.rows(),
-                    index_descriptors.data.data());
-      }
-    }
+    descriptors_ = index_descriptors.data;
   }
 
   void Search(int num_neighbors,
@@ -91,52 +54,75 @@ class FaissFeatureDescriptorIndex : public FeatureDescriptorIndex {
               Eigen::RowMajorMatrixXf& l2_dists) const override {
     THROW_CHECK_EQ(query_descriptors.type, type_);
 
-    if (num_neighbors <= 0 || index_ == nullptr) {
+    if (num_neighbors <= 0 || descriptors_.rows() == 0) {
       indices.resize(0, 0);
       l2_dists.resize(0, 0);
       return;
     }
 
-    THROW_CHECK_EQ(query_descriptors.data.cols(), index_->d);
-    const int64_t num_query_descriptors = query_descriptors.data.rows();
+    THROW_CHECK_EQ(query_descriptors.data.cols(), descriptors_.cols());
+    const Eigen::Index num_query_descriptors = query_descriptors.data.rows();
     if (num_query_descriptors == 0) {
       return;
     }
 
-    const int64_t num_eff_neighbors =
-        std::min<int64_t>(num_neighbors, index_->ntotal);
-
-    l2_dists.resize(num_query_descriptors, num_eff_neighbors);
-    Eigen::Matrix<int64_t, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
-        indices_long(num_query_descriptors, num_eff_neighbors);
-
-#pragma omp parallel num_threads(1)
-    {
-      omp_set_num_threads(num_threads_);
-#ifdef _MSC_VER
-      omp_set_nested(1);
-#else
-      omp_set_max_active_levels(1);
-#endif
-
-      faiss::SearchParametersIVF search_params;
-      search_params.nprobe = 8;
-      index_->search(num_query_descriptors,
-                     query_descriptors.data.data(),
-                     num_eff_neighbors,
-                     l2_dists.data(),
-                     indices_long.data(),
-                     &search_params);
+    const Eigen::Index num_eff_neighbors =
+        std::min<Eigen::Index>(num_neighbors, descriptors_.rows());
+    if (num_eff_neighbors <= 0) {
+      indices.resize(num_query_descriptors, 0);
+      l2_dists.resize(num_query_descriptors, 0);
+      return;
     }
 
-    indices = indices_long.cast<int>();
+    l2_dists.resize(num_query_descriptors, num_eff_neighbors);
+    indices.resize(num_query_descriptors, num_eff_neighbors);
+
+    std::vector<int> candidate_indices(descriptors_.rows());
+    std::iota(candidate_indices.begin(), candidate_indices.end(), 0);
+    std::vector<float> candidate_dists(descriptors_.rows());
+
+    for (Eigen::Index query_idx = 0; query_idx < num_query_descriptors;
+         ++query_idx) {
+      const auto query = query_descriptors.data.row(query_idx);
+      for (Eigen::Index desc_idx = 0; desc_idx < descriptors_.rows();
+           ++desc_idx) {
+        candidate_dists[desc_idx] =
+            (query - descriptors_.row(desc_idx)).squaredNorm();
+      }
+
+      if (num_eff_neighbors < descriptors_.rows()) {
+        std::nth_element(
+            candidate_indices.begin(),
+            candidate_indices.begin() + num_eff_neighbors,
+            candidate_indices.end(),
+            [&](const int lhs, const int rhs) {
+              if (candidate_dists[lhs] == candidate_dists[rhs]) {
+                return lhs < rhs;
+              }
+              return candidate_dists[lhs] < candidate_dists[rhs];
+            });
+      }
+      std::sort(candidate_indices.begin(),
+                candidate_indices.begin() + num_eff_neighbors,
+                [&](const int lhs, const int rhs) {
+                  if (candidate_dists[lhs] == candidate_dists[rhs]) {
+                    return lhs < rhs;
+                  }
+                  return candidate_dists[lhs] < candidate_dists[rhs];
+                });
+
+      for (Eigen::Index neighbor_idx = 0; neighbor_idx < num_eff_neighbors;
+           ++neighbor_idx) {
+        const int index = candidate_indices[neighbor_idx];
+        indices(query_idx, neighbor_idx) = index;
+        l2_dists(query_idx, neighbor_idx) = candidate_dists[index];
+      }
+    }
   }
 
  private:
-  const int num_threads_;
   FeatureExtractorType type_ = FeatureExtractorType::UNDEFINED;
-  std::unique_ptr<faiss::Index> index_;
-  std::unique_ptr<faiss::IndexFlatL2> coarse_quantizer_;
+  FeatureDescriptorsFloatData descriptors_;
 };
 
 }  // namespace
@@ -145,7 +131,7 @@ std::unique_ptr<FeatureDescriptorIndex> FeatureDescriptorIndex::Create(
     Type type, int num_threads) {
   switch (type) {
     case Type::FAISS:
-      return std::make_unique<FaissFeatureDescriptorIndex>(num_threads);
+      return std::make_unique<ExactFeatureDescriptorIndex>(num_threads);
     default:
       throw std::runtime_error("Feature descriptor index not implemented");
   }

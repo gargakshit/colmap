@@ -13,7 +13,11 @@ else()
     message(STATUS "Disabling LSD support")
 endif()
 
-find_package(OpenMP REQUIRED COMPONENTS C CXX)
+if(OPENMP_ENABLED)
+    find_package(OpenMP REQUIRED COMPONENTS C CXX)
+else()
+    message(STATUS "Disabling OpenMP support")
+endif()
 
 find_package(Boost ${COLMAP_FIND_TYPE} COMPONENTS
              graph
@@ -39,7 +43,64 @@ find_package(SQLite3 ${COLMAP_FIND_TYPE})
 set(OpenGL_GL_PREFERENCE GLVND)
 find_package(OpenGL ${COLMAP_FIND_TYPE})
 
+if(APPLE)
+    function(colmap_strip_macos_sdk_usr_include target_name)
+        foreach(property_name
+                INCLUDE_DIRECTORIES
+                SYSTEM_INCLUDE_DIRECTORIES
+                INTERFACE_INCLUDE_DIRECTORIES
+                INTERFACE_SYSTEM_INCLUDE_DIRECTORIES)
+            get_target_property(target_includes ${target_name} ${property_name})
+            if(target_includes)
+                list(FILTER target_includes EXCLUDE REGEX [[/MacOSX[^/]*/usr/include$]])
+                set_target_properties(${target_name} PROPERTIES
+                    ${property_name} "${target_includes}")
+            endif()
+        endforeach()
+    endfunction()
+
+    function(colmap_strip_macos_sdk_usr_include_if_target target_name)
+        if(TARGET ${target_name})
+            # Homebrew LLVM ships libc++; injecting the macOS SDK C headers as
+            # an explicit -isystem path breaks libc++'s wrapper header search
+            # order.
+            colmap_strip_macos_sdk_usr_include(${target_name})
+        endif()
+    endfunction()
+
+    foreach(target_name
+            Boost::boost
+            Boost::graph
+            Boost::headers
+            Boost::program_options
+            Ceres::ceres
+            CGAL
+            CHOLMOD::CHOLMOD
+            CURL::libcurl
+            Eigen3::Eigen
+            GLEW::GLEW
+            glog::glog
+            metis
+            OpenGL::GL
+            OpenImageIO::OpenImageIO
+            OpenImageIO::OpenImageIO_Util
+            OpenMP::OpenMP_C
+            OpenMP::OpenMP_CXX
+            OpenSSL::Crypto)
+        colmap_strip_macos_sdk_usr_include_if_target(${target_name})
+    endforeach()
+endif()
+
 find_package(Glew ${COLMAP_FIND_TYPE})
+
+if(APPLE)
+    foreach(target_name
+            GLEW::GLEW
+            OpenGL::GL
+            SQLite::SQLite3)
+        colmap_strip_macos_sdk_usr_include_if_target(${target_name})
+    endforeach()
+endif()
 
 find_package(Git)
 

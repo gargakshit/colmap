@@ -175,6 +175,13 @@ struct BundleAdjustmentOptions : public BundleAdjustmentBackendOptions {
   // Whether to refine the extra parameter group.
   bool refine_extra_params = true;
 
+  // Whether to evaluate and optimize reprojection with refractive camera
+  // models when the corresponding camera provides one.
+  bool enable_refraction = false;
+
+  // Whether to refine refractive interface parameters.
+  bool refine_refrac_params = false;
+
   // Whether to refine the extrinsic parameter group.
   bool refine_sensor_from_rig = true;
   bool refine_rig_from_world = true;

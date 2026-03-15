@@ -35,12 +35,19 @@
 #include "colmap/scene/reconstruction.h"
 #include "colmap/scene/reconstruction_io_utils.h"
 #include "colmap/scene/track.h"
+#include "colmap/sensor/models_refrac.h"
 #include "colmap/util/file.h"
 #include "colmap/util/types.h"
 
 #include <fstream>
 
 namespace colmap {
+
+namespace {
+
+constexpr char kRefracToken[] = "REFRAC";
+
+}  // namespace
 
 void ReadRigsText(Reconstruction& reconstruction, std::istream& stream) {
   THROW_CHECK(stream.good());
@@ -167,10 +174,30 @@ void ReadCamerasText(Reconstruction& reconstruction, std::istream& stream) {
     camera.params.reserve(CameraModelNumParams(camera.model_id));
     while (!line_stream.eof()) {
       std::getline(line_stream, item, ' ');
+      if (item.empty()) {
+        continue;
+      }
+      if (item == kRefracToken) {
+        break;
+      }
       camera.params.push_back(std::stold(item));
     }
 
+    if (item == kRefracToken) {
+      std::getline(line_stream, item, ' ');
+      camera.refrac_model_id = CameraRefracModelNameToId(item);
+      camera.refrac_params.reserve(
+          CameraRefracModelNumParams(camera.refrac_model_id));
+      while (!line_stream.eof()) {
+        std::getline(line_stream, item, ' ');
+        if (!item.empty()) {
+          camera.refrac_params.push_back(std::stold(item));
+        }
+      }
+    }
+
     THROW_CHECK(camera.VerifyParams());
+    THROW_CHECK(camera.VerifyRefracParams());
     reconstruction.AddCamera(std::move(camera));
   }
 }
@@ -529,7 +556,8 @@ void WriteCamerasText(const Reconstruction& reconstruction,
   stream.precision(17);
 
   stream << "# Camera list with one line of data per camera:\n";
-  stream << "#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n";
+  stream << "#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[] "
+            "[REFRAC MODEL PARAMS[]]\n";
   stream << "# Number of cameras: " << reconstruction.NumCameras() << '\n';
 
   for (const camera_t camera_id : ExtractSortedIds(reconstruction.Cameras())) {
@@ -545,6 +573,14 @@ void WriteCamerasText(const Reconstruction& reconstruction,
 
     for (const double param : camera.params) {
       line << param << " ";
+    }
+
+    if (camera.IsCameraRefractive()) {
+      line << kRefracToken << " ";
+      line << camera.RefracModelName() << " ";
+      for (const double param : camera.refrac_params) {
+        line << param << " ";
+      }
     }
 
     std::string line_string = line.str();

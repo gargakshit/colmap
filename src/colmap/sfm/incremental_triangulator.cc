@@ -37,6 +37,7 @@ namespace {
 
 bool TriangulateTrack(
     const EstimateTriangulationOptions& options,
+    const bool enable_refraction,
     const std::vector<IncrementalTriangulator::CorrData>& corrs_data,
     std::vector<char>& inlier_mask,
     Eigen::Vector3d& xyz) {
@@ -44,13 +45,30 @@ bool TriangulateTrack(
   points.resize(corrs_data.size());
   std::vector<Rigid3d> cams_from_world;
   cams_from_world.resize(corrs_data.size());
+  std::vector<Camera> virtual_cameras;
   std::vector<Camera const*> cameras;
   cameras.resize(corrs_data.size());
   for (size_t i = 0; i < corrs_data.size(); ++i) {
     const auto& corr_data = corrs_data[i];
-    points[i] = corr_data.point2D->xy;
-    cams_from_world[i] = corr_data.image->CamFromWorld();
-    cameras[i] = corr_data.camera;
+    if (!enable_refraction || !corr_data.camera->IsCameraRefractive()) {
+      points[i] = corr_data.point2D->xy;
+      cams_from_world[i] = corr_data.image->CamFromWorld();
+      cameras[i] = corr_data.camera;
+    } else {
+      if (virtual_cameras.empty()) {
+        virtual_cameras.resize(corrs_data.size());
+      }
+      Rigid3d virtual_from_real;
+      corr_data.camera->ComputeVirtual(
+          corr_data.point2D->xy, virtual_cameras[i], virtual_from_real);
+      const auto cam_point = virtual_cameras[i].CamFromImg(corr_data.point2D->xy);
+      if (!cam_point) {
+        return false;
+      }
+      points[i] = *cam_point;
+      cams_from_world[i] = virtual_from_real * corr_data.image->CamFromWorld();
+      cameras[i] = &virtual_cameras[i];
+    }
   }
 
   // Enforce exhaustive sampling for small track lengths.
@@ -223,7 +241,8 @@ size_t IncrementalTriangulator::CompleteImage(const Options& options,
     // Estimate triangulation.
     Eigen::Vector3d xyz;
     std::vector<char> inlier_mask;
-    if (!TriangulateTrack(tri_options, corrs_data, inlier_mask, xyz)) {
+    if (!TriangulateTrack(
+            tri_options, options.enable_refraction, corrs_data, inlier_mask, xyz)) {
       continue;
     }
 
@@ -507,7 +526,11 @@ size_t IncrementalTriangulator::Create(
   // Estimate triangulation.
   Eigen::Vector3d xyz;
   std::vector<char> inlier_mask;
-  if (!TriangulateTrack(tri_options, create_corrs_data, inlier_mask, xyz)) {
+  if (!TriangulateTrack(tri_options,
+                        options.enable_refraction,
+                        create_corrs_data,
+                        inlier_mask,
+                        xyz)) {
     return 0;
   }
 
@@ -632,7 +655,8 @@ size_t IncrementalTriangulator::Merge(const Options& options,
           if (CalculateSquaredReprojectionError(test_point2D.xy,
                                                 merged_xyz,
                                                 test_image.CamFromWorld(),
-                                                test_camera) >
+                                                test_camera,
+                                                options.enable_refraction) >
               max_squared_reproj_error) {
             merge_success = false;
             break;
@@ -711,7 +735,11 @@ size_t IncrementalTriangulator::Complete(const Options& options,
         }
 
         if (CalculateSquaredReprojectionError(
-                point2D.xy, point3D.xyz, image.CamFromWorld(), camera) >
+                point2D.xy,
+                point3D.xyz,
+                image.CamFromWorld(),
+                camera,
+                options.enable_refraction) >
             max_squared_reproj_error) {
           continue;
         }

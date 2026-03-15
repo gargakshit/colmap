@@ -155,6 +155,10 @@ class IncrementalMapper {
     // PRNG seed for all stochastic methods during reconstruction.
     int random_seed = -1;
 
+    // Whether to enable refractive relative pose estimation when the involved
+    // cameras carry refractive models.
+    bool enable_refraction = false;
+
     // Method to find and select next best image to register.
     enum class ImageSelectionMethod {
       MAX_VISIBLE_POINTS_NUM,

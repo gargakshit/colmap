@@ -226,6 +226,31 @@ class VerifierWorker : public Thread {
               data.matches,
               options_.min_num_inliers,
               options_.ransac_options.max_error);
+        } else if (options_.enable_refraction && camera1.IsCameraRefractive() &&
+                   camera2.IsCameraRefractive()) {
+          const Camera& best_fit_camera1 =
+              cache_->GetBestFitCamera(camera1.camera_id);
+          const Camera& best_fit_camera2 =
+              cache_->GetBestFitCamera(camera2.camera_id);
+
+          std::vector<Camera> virtual_cameras1;
+          std::vector<Camera> virtual_cameras2;
+          std::vector<Rigid3d> virtual_from_reals1;
+          std::vector<Rigid3d> virtual_from_reals2;
+          camera1.ComputeVirtuals(points1, virtual_cameras1, virtual_from_reals1);
+          camera2.ComputeVirtuals(points2, virtual_cameras2, virtual_from_reals2);
+
+          data.two_view_geometry = EstimateRefractiveTwoViewGeometryUseBestFit(
+              best_fit_camera1,
+              points1,
+              virtual_cameras1,
+              virtual_from_reals1,
+              best_fit_camera2,
+              points2,
+              virtual_cameras2,
+              virtual_from_reals2,
+              data.matches,
+              options_);
         } else {
           data.two_view_geometry = EstimateTwoViewGeometry(
               camera1, points1, camera2, points2, data.matches, options_);

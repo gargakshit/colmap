@@ -30,6 +30,7 @@
 #include "colmap/scene/database.h"
 
 #include "colmap/scene/database_sqlite.h"
+#include "colmap/sensor/models_refrac.h"
 #include "colmap/util/eigen_alignment.h"
 #include "colmap/util/file.h"
 #include "colmap/util/testing.h"
@@ -192,6 +193,16 @@ TEST_P(ParameterizedDatabaseTests, Camera) {
               testing::ElementsAre(camera, camera2));
   database->ClearCameras();
   EXPECT_EQ(database->NumCameras(), 0);
+}
+
+TEST_P(ParameterizedDatabaseTests, RefractiveCamera) {
+  std::shared_ptr<Database> database = GetParam()(kInMemorySqliteDatabasePath);
+  Camera camera = Camera::CreateFromModelName(
+      kInvalidCameraId, "SIMPLE_PINHOLE", 1.0, 1, 1);
+  camera.refrac_model_id = CameraRefracModelId::kFlatPort;
+  camera.refrac_params = {0.0, 0.0, 1.0, 0.05, 0.007, 1.0, 1.49, 1.333};
+  camera.camera_id = database->WriteCamera(camera);
+  EXPECT_EQ(database->ReadCamera(camera.camera_id), camera);
 }
 
 TEST_P(ParameterizedDatabaseTests, Frame) {

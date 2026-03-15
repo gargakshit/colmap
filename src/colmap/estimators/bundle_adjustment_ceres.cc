@@ -38,6 +38,9 @@
 #include "colmap/util/misc.h"
 #include "colmap/util/threading.h"
 
+#include <algorithm>
+#include <numeric>
+
 #include <iomanip>
 
 namespace colmap {
@@ -447,6 +450,45 @@ void ParameterizeCameras(const BundleAdjustmentOptions& options,
             CreateSubsetManifold(camera.params.size(), const_camera_params));
       }
     }
+
+    if (!options.enable_refraction || !camera.IsCameraRefractive()) {
+      continue;
+    }
+
+    if (!options.refine_refrac_params) {
+      problem.SetParameterBlockConstant(camera.refrac_params.data());
+      continue;
+    }
+
+    std::vector<int> refrac_param_indices(camera.refrac_params.size());
+    std::iota(refrac_param_indices.begin(), refrac_param_indices.end(), 0);
+    const auto optimizable = camera.OptimizableRefracParamsIdxs();
+    std::vector<int> const_refrac_params;
+    std::set_difference(refrac_param_indices.begin(),
+                        refrac_param_indices.end(),
+                        optimizable.begin(),
+                        optimizable.end(),
+                        std::back_inserter(const_refrac_params));
+
+    if (camera.RefracModelName() == "FLATPORT" &&
+        camera.refrac_params.size() >= 3) {
+      std::vector<int> subset_indices = const_refrac_params;
+      for (int& idx : subset_indices) {
+        idx -= 3;
+      }
+      SetManifold(
+          &problem,
+          camera.refrac_params.data(),
+          CreateProductManifold(
+              CreateSphereManifold<3>(),
+              CreateSubsetManifold(camera.refrac_params.size() - 3,
+                                   subset_indices)));
+    } else if (!const_refrac_params.empty()) {
+      SetManifold(&problem,
+                  camera.refrac_params.data(),
+                  CreateSubsetManifold(camera.refrac_params.size(),
+                                       const_refrac_params));
+    }
   }
 }
 
@@ -706,21 +748,45 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
       num_observations += 1;
       point3D_num_observations_[point2D.point3D_id] += 1;
 
+      const bool use_refrac =
+          options_.enable_refraction && camera.IsCameraRefractive();
       if (constant_cam_from_world) {
-        problem_->AddResidualBlock(
-            CreateCameraCostFunction<ReprojErrorConstantPoseCostFunctor>(
-                camera.model_id, point2D.xy, rig_from_world),
-            loss_function_.get(),
-            point3D.xyz.data(),
-            camera.params.data());
+        if (!use_refrac) {
+          problem_->AddResidualBlock(
+              CreateCameraCostFunction<ReprojErrorConstantPoseCostFunctor>(
+                  camera.model_id, point2D.xy, rig_from_world),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              camera.params.data());
+        } else {
+          problem_->AddResidualBlock(
+              CreateCameraRefracCostFunction<
+                  ReprojErrorRefracConstantPoseCostFunctor>(
+                  camera.model_id, camera.refrac_model_id, point2D.xy, rig_from_world),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              camera.params.data(),
+              camera.refrac_params.data());
+        }
       } else {
-        problem_->AddResidualBlock(
-            CreateCameraCostFunction<ReprojErrorCostFunctor>(camera.model_id,
-                                                             point2D.xy),
-            loss_function_.get(),
-            point3D.xyz.data(),
-            rig_from_world.params.data(),
-            camera.params.data());
+        if (!use_refrac) {
+          problem_->AddResidualBlock(
+              CreateCameraCostFunction<ReprojErrorCostFunctor>(camera.model_id,
+                                                               point2D.xy),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              rig_from_world.params.data(),
+              camera.params.data());
+        } else {
+          problem_->AddResidualBlock(
+              CreateCameraRefracCostFunction<ReprojErrorRefracCostFunctor>(
+                  camera.model_id, camera.refrac_model_id, point2D.xy),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              rig_from_world.params.data(),
+              camera.params.data(),
+              camera.refrac_params.data());
+        }
       }
     }
 
@@ -773,13 +839,29 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
 
       // The !constant_sensor_from_rig && constant_rig_from_world is
       // rare enough that we do not have a specialized cost function for it.
+      const bool use_refrac =
+          options_.enable_refraction && camera.IsCameraRefractive();
       if (constant_sensor_from_rig && constant_rig_from_world) {
-        problem_->AddResidualBlock(
-            CreateCameraCostFunction<ReprojErrorConstantPoseCostFunctor>(
-                camera.model_id, point2D.xy, cam_from_world.value()),
-            loss_function_.get(),
-            point3D.xyz.data(),
-            camera.params.data());
+        if (!use_refrac) {
+          problem_->AddResidualBlock(
+              CreateCameraCostFunction<ReprojErrorConstantPoseCostFunctor>(
+                  camera.model_id, point2D.xy, cam_from_world.value()),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              camera.params.data());
+        } else {
+          problem_->AddResidualBlock(
+              CreateCameraRefracCostFunction<
+                  ReprojErrorRefracConstantPoseCostFunctor>(
+                  camera.model_id,
+                  camera.refrac_model_id,
+                  point2D.xy,
+                  cam_from_world.value()),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              camera.params.data(),
+              camera.refrac_params.data());
+        }
       } else if (!constant_rig_from_world && constant_sensor_from_rig) {
         problem_->AddResidualBlock(
             CreateCameraCostFunction<RigReprojErrorConstantRigCostFunctor>(
@@ -840,13 +922,23 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
 
       if (image.IsRefInFrame()) {
         Rigid3d& cam_from_world = image.FramePtr()->RigFromWorld();
-
-        problem_->AddResidualBlock(
-            CreateCameraCostFunction<ReprojErrorConstantPoseCostFunctor>(
-                camera.model_id, point2D.xy, cam_from_world),
-            loss_function_.get(),
-            point3D.xyz.data(),
-            camera.params.data());
+        if (!options_.enable_refraction || !camera.IsCameraRefractive()) {
+          problem_->AddResidualBlock(
+              CreateCameraCostFunction<ReprojErrorConstantPoseCostFunctor>(
+                  camera.model_id, point2D.xy, cam_from_world),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              camera.params.data());
+        } else {
+          problem_->AddResidualBlock(
+              CreateCameraRefracCostFunction<
+                  ReprojErrorRefracConstantPoseCostFunctor>(
+                  camera.model_id, camera.refrac_model_id, point2D.xy, cam_from_world),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              camera.params.data(),
+              camera.refrac_params.data());
+        }
       } else {
         Rigid3d& cam_from_rig = image.FramePtr()->RigPtr()->SensorFromRig(
             image.CameraPtr()->SensorId());

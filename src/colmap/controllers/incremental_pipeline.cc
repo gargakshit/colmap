@@ -142,6 +142,7 @@ IncrementalMapper::Options IncrementalPipelineOptions::Mapper() const {
   options.use_robust_loss_on_prior_position = use_robust_loss_on_prior_position;
   options.prior_position_loss_scale = prior_position_loss_scale;
   options.random_seed = random_seed;
+  options.enable_refraction = enable_refraction;
   return options;
 }
 
@@ -152,6 +153,7 @@ IncrementalTriangulator::Options IncrementalPipelineOptions::Triangulation()
   options.max_focal_length_ratio = max_focal_length_ratio;
   options.max_extra_param = max_extra_param;
   options.random_seed = random_seed;
+  options.enable_refraction = enable_refraction;
   return options;
 }
 
@@ -162,6 +164,8 @@ BundleAdjustmentOptions IncrementalPipelineOptions::LocalBundleAdjustment()
   options.refine_focal_length = ba_refine_focal_length;
   options.refine_principal_point = ba_refine_principal_point;
   options.refine_extra_params = ba_refine_extra_params;
+  options.enable_refraction = enable_refraction;
+  options.refine_refrac_params = ba_refine_refrac_params;
   options.refine_sensor_from_rig = ba_refine_sensor_from_rig;
   if (options.ceres) {
     options.ceres->solver_options.function_tolerance =
@@ -194,6 +198,8 @@ BundleAdjustmentOptions IncrementalPipelineOptions::GlobalBundleAdjustment()
   options.refine_focal_length = ba_refine_focal_length;
   options.refine_principal_point = ba_refine_principal_point;
   options.refine_extra_params = ba_refine_extra_params;
+  options.enable_refraction = enable_refraction;
+  options.refine_refrac_params = ba_refine_refrac_params;
   options.refine_sensor_from_rig = ba_refine_sensor_from_rig;
   if (options.ceres) {
     options.ceres->solver_options.function_tolerance =
@@ -418,7 +424,7 @@ IncrementalPipeline::Status IncrementalPipeline::InitializeReconstruction(
 
   LOG(INFO) << "Global bundle adjustment";
   mapper.AdjustGlobalBundle(mapper_options, options_->GlobalBundleAdjustment());
-  reconstruction.Normalize();
+  reconstruction.Normalize(/*fixed_scale=*/mapper_options.enable_refraction);
   mapper.FilterPoints(mapper_options);
   mapper.FilterFrames(mapper_options);
 
@@ -648,7 +654,7 @@ IncrementalPipeline::Status IncrementalPipeline::Reconstruct(
         ReconstructSubModel(mapper, mapper_options, reconstruction);
     switch (status) {
       case Status::INTERRUPTED: {
-        reconstruction->UpdatePoint3DErrors();
+        reconstruction->UpdatePoint3DErrors(mapper_options.enable_refraction);
         LOG(INFO) << "Keeping reconstruction due to interrupt";
         mapper.EndReconstruction(/*discard=*/false);
         AlignReconstructionToOrigRigScales(database_cache_->Rigs(),
@@ -706,7 +712,7 @@ IncrementalPipeline::Status IncrementalPipeline::Reconstruct(
           mapper.EndReconstruction(/*discard=*/true);
           reconstruction_manager_->Delete(reconstruction_idx);
         } else {
-          reconstruction->UpdatePoint3DErrors();
+          reconstruction->UpdatePoint3DErrors(mapper_options.enable_refraction);
           LOG(INFO) << "Keeping successful reconstruction";
           mapper.EndReconstruction(/*discard=*/false);
           AlignReconstructionToOrigRigScales(database_cache_->Rigs(),
@@ -769,7 +775,7 @@ void IncrementalPipeline::TriangulateReconstruction(
                                    /*normalize_reconstruction=*/false);
   mapper.EndReconstruction(/*discard=*/false);
 
-  reconstruction->UpdatePoint3DErrors();
+  reconstruction->UpdatePoint3DErrors(options_->Mapper().enable_refraction);
 
   LOG(INFO) << "Extracting colors";
   reconstruction->ExtractColorsForAllImages(options_->image_path);

@@ -35,6 +35,7 @@
 #include "colmap/scene/reconstruction.h"
 #include "colmap/scene/reconstruction_io_utils.h"
 #include "colmap/scene/track.h"
+#include "colmap/sensor/models_refrac.h"
 #include "colmap/util/endian.h"
 #include "colmap/util/file.h"
 #include "colmap/util/types.h"
@@ -42,6 +43,12 @@
 #include <fstream>
 
 namespace colmap {
+
+namespace {
+
+constexpr int kRefracCameraBinaryMarker = 0x52454652;
+
+}  // namespace
 
 void ReadRigsBinary(Reconstruction& reconstruction, std::istream& stream) {
   THROW_CHECK(stream.good());
@@ -116,7 +123,24 @@ void ReadCamerasBinary(Reconstruction& reconstruction, std::istream& stream) {
     camera.height = ReadBinaryLittleEndian<uint64_t>(&stream);
     camera.params.resize(CameraModelNumParams(camera.model_id), 0.);
     ReadBinaryLittleEndian<double>(&stream, &camera.params);
+    const std::streampos maybe_refrac_pos = stream.tellg();
+    if (maybe_refrac_pos != std::streampos(-1)) {
+      const int marker = ReadBinaryLittleEndian<int>(&stream);
+      if (stream.good() && marker == kRefracCameraBinaryMarker) {
+        camera.refrac_model_id =
+            static_cast<CameraRefracModelId>(ReadBinaryLittleEndian<int>(
+                &stream));
+        const uint64_t num_refrac_params =
+            ReadBinaryLittleEndian<uint64_t>(&stream);
+        camera.refrac_params.resize(num_refrac_params, 0.);
+        ReadBinaryLittleEndian<double>(&stream, &camera.refrac_params);
+      } else {
+        stream.clear();
+        stream.seekg(maybe_refrac_pos);
+      }
+    }
     THROW_CHECK(camera.VerifyParams());
+    THROW_CHECK(camera.VerifyRefracParams());
     reconstruction.AddCamera(std::move(camera));
   }
 }
@@ -350,6 +374,16 @@ void WriteCamerasBinary(const Reconstruction& reconstruction,
     WriteBinaryLittleEndian<uint64_t>(&stream, camera.height);
     for (const double param : camera.params) {
       WriteBinaryLittleEndian<double>(&stream, param);
+    }
+    if (camera.IsCameraRefractive()) {
+      WriteBinaryLittleEndian<int>(&stream, kRefracCameraBinaryMarker);
+      WriteBinaryLittleEndian<int>(&stream,
+                                   static_cast<int>(camera.refrac_model_id));
+      WriteBinaryLittleEndian<uint64_t>(&stream,
+                                        camera.refrac_params.size());
+      for (const double param : camera.refrac_params) {
+        WriteBinaryLittleEndian<double>(&stream, param);
+      }
     }
   }
 }

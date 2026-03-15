@@ -86,6 +86,10 @@ class IncrementalTriangulator {
     // PRNG seed for all stochastic methods during triangulation.
     int random_seed = -1;
 
+    // Whether to use refractive virtual cameras when the participating cameras
+    // carry refractive models.
+    bool enable_refraction = false;
+
     bool Check() const;
   };
 

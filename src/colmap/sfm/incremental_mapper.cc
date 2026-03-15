@@ -33,6 +33,8 @@
 #include "colmap/estimators/generalized_pose.h"
 #include "colmap/estimators/pose.h"
 #include "colmap/estimators/triangulation.h"
+#include "colmap/geometry/triangulation.h"
+#include "colmap/scene/projection.h"
 #include "colmap/scene/reconstruction_pruning.h"
 #include "colmap/sfm/incremental_mapper_impl.h"
 
@@ -164,6 +166,8 @@ void IncrementalMapper::RegisterInitialImagePair(
 
   Image& image1 = reconstruction_->Image(image_id1);
   Image& image2 = reconstruction_->Image(image_id2);
+  Camera& camera1 = *image1.CameraPtr();
+  Camera& camera2 = *image2.CameraPtr();
 
   //////////////////////////////////////////////////////////////////////////////
   // Apply two-view geometry
@@ -178,6 +182,80 @@ void IncrementalMapper::RegisterInitialImagePair(
 
   RegisterFrameEvent(image1.FrameId());
   RegisterFrameEvent(image2.FrameId());
+
+  // Seed a minimal initial structure immediately for refractive pipelines so
+  // the subsequent triangulation/refinement stages start from valid tracks.
+  FeatureMatches corrs;
+  database_cache_->CorrespondenceGraph()->ExtractMatchesBetweenImages(image_id1,
+                                                                      image_id2,
+                                                                      corrs);
+  const double min_tri_angle_rad = DegToRad(options.init_min_tri_angle);
+  Track track;
+  track.Reserve(2);
+  track.AddElement(TrackElement());
+  track.AddElement(TrackElement());
+  track.Element(0).image_id = image_id1;
+  track.Element(1).image_id = image_id2;
+  for (const auto& corr : corrs) {
+    Eigen::Matrix3x4d proj_matrix1;
+    Eigen::Matrix3x4d proj_matrix2;
+    Eigen::Vector3d proj_center1;
+    Eigen::Vector3d proj_center2;
+    std::optional<Eigen::Vector2d> point1;
+    std::optional<Eigen::Vector2d> point2;
+
+    if (!options.enable_refraction || !camera1.IsCameraRefractive() ||
+        !camera2.IsCameraRefractive()) {
+      proj_matrix1 = image1.CamFromWorld().ToMatrix();
+      proj_matrix2 = image2.CamFromWorld().ToMatrix();
+      proj_center1 = image1.ProjectionCenter();
+      proj_center2 = image2.ProjectionCenter();
+      point1 = camera1.CamFromImg(image1.Point2D(corr.point2D_idx1).xy);
+      point2 = camera2.CamFromImg(image2.Point2D(corr.point2D_idx2).xy);
+    } else {
+      Camera virtual_camera1;
+      Camera virtual_camera2;
+      Rigid3d virtual_from_real1;
+      Rigid3d virtual_from_real2;
+      camera1.ComputeVirtual(
+          image1.Point2D(corr.point2D_idx1).xy, virtual_camera1, virtual_from_real1);
+      camera2.ComputeVirtual(
+          image2.Point2D(corr.point2D_idx2).xy, virtual_camera2, virtual_from_real2);
+      const Rigid3d virtual1_from_world =
+          virtual_from_real1 * image1.FramePtr()->RigFromWorld();
+      const Rigid3d virtual2_from_world =
+          virtual_from_real2 * image2.FramePtr()->RigFromWorld();
+      proj_matrix1 = virtual1_from_world.ToMatrix();
+      proj_matrix2 = virtual2_from_world.ToMatrix();
+      proj_center1 =
+          virtual1_from_world.rotation().inverse() *
+          -virtual1_from_world.translation();
+      proj_center2 =
+          virtual2_from_world.rotation().inverse() *
+          -virtual2_from_world.translation();
+      point1 = virtual_camera1.CamFromImg(image1.Point2D(corr.point2D_idx1).xy);
+      point2 = virtual_camera2.CamFromImg(image2.Point2D(corr.point2D_idx2).xy);
+    }
+
+    if (!point1 || !point2) {
+      continue;
+    }
+
+    Eigen::Vector3d xyz;
+    if (!TriangulatePoint(
+            proj_matrix1, proj_matrix2, *point1, *point2, &xyz)) {
+      continue;
+    }
+    const double tri_angle =
+        CalculateTriangulationAngle(proj_center1, proj_center2, xyz);
+    if (tri_angle >= min_tri_angle_rad && HasPointPositiveDepth(proj_matrix1, xyz) &&
+        HasPointPositiveDepth(proj_matrix2, xyz)) {
+      track.Element(0).point2D_idx = corr.point2D_idx1;
+      track.Element(1).point2D_idx = corr.point2D_idx2;
+      const point3D_t point3D_id = obs_manager_->AddPoint3D(xyz, track);
+      triangulator_->AddModifiedPoint3D(point3D_id);
+    }
+  }
 }
 
 bool IncrementalMapper::RegisterNextImage(const Options& options,
@@ -372,15 +450,48 @@ bool IncrementalMapper::RegisterNextImage(const Options& options,
   size_t num_inliers;
   std::vector<char> inlier_mask;
   Rigid3d cam_from_world;
-  if (!EstimateAbsolutePose(abs_pose_options,
-                            tri_points2D,
-                            tri_points3D,
-                            &cam_from_world,
-                            &camera,
-                            &num_inliers,
-                            &inlier_mask)) {
-    VLOG(2) << "Absolute pose estimation failed";
-    return false;
+  if (!options.enable_refraction || !camera.IsCameraRefractive()) {
+    if (!EstimateAbsolutePose(abs_pose_options,
+                              tri_points2D,
+                              tri_points3D,
+                              &cam_from_world,
+                              &camera,
+                              &num_inliers,
+                              &inlier_mask)) {
+      VLOG(2) << "Absolute pose estimation failed";
+      return false;
+    }
+  } else {
+    std::vector<Camera> virtual_cameras;
+    std::vector<Rigid3d> virtual_from_reals;
+    camera.ComputeVirtuals(tri_points2D, virtual_cameras, virtual_from_reals);
+    std::vector<size_t> camera_idxs(tri_points2D.size());
+    std::iota(camera_idxs.begin(), camera_idxs.end(), 0);
+    if (!EstimateGeneralizedAbsolutePose(abs_pose_options.ransac_options,
+                                         tri_points2D,
+                                         tri_points3D,
+                                         camera_idxs,
+                                         virtual_from_reals,
+                                         virtual_cameras,
+                                         &cam_from_world,
+                                         &num_inliers,
+                                         &inlier_mask)) {
+      VLOG(2) << "Generalized refractive absolute pose estimation failed";
+      return false;
+    }
+    abs_pose_refinement_options.refine_focal_length = false;
+    abs_pose_refinement_options.refine_extra_params = false;
+    if (!RefineGeneralizedAbsolutePose(abs_pose_refinement_options,
+                                       inlier_mask,
+                                       tri_points2D,
+                                       tri_points3D,
+                                       camera_idxs,
+                                       virtual_from_reals,
+                                       &cam_from_world,
+                                       &virtual_cameras)) {
+      VLOG(2) << "Generalized refractive absolute pose refinement failed";
+      return false;
+    }
   }
 
   if (num_inliers < static_cast<size_t>(options.abs_pose_min_num_inliers)) {
@@ -393,14 +504,16 @@ bool IncrementalMapper::RegisterNextImage(const Options& options,
   // Pose refinement
   //////////////////////////////////////////////////////////////////////////////
 
-  if (!RefineAbsolutePose(abs_pose_refinement_options,
-                          inlier_mask,
-                          tri_points2D,
-                          tri_points3D,
-                          &cam_from_world,
-                          &camera)) {
-    VLOG(2) << "Absolute pose refinement failed";
-    return false;
+  if (!options.enable_refraction || !camera.IsCameraRefractive()) {
+    if (!RefineAbsolutePose(abs_pose_refinement_options,
+                            inlier_mask,
+                            tri_points2D,
+                            tri_points3D,
+                            &cam_from_world,
+                            &camera)) {
+      VLOG(2) << "Absolute pose refinement failed";
+      return false;
+    }
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -1038,11 +1151,15 @@ IncrementalMapper::AdjustLocalBundle(
   // many of the provided 3D points may also be contained in the adjusted
   // images, but the filtering is not a bottleneck at this point.
   report.num_filtered_observations = obs_manager_->FilterPoints3DInImages(
-      options.filter_max_reproj_error, options.filter_min_tri_angle, image_ids);
+      options.filter_max_reproj_error,
+      options.filter_min_tri_angle,
+      image_ids,
+      options.enable_refraction);
   report.num_filtered_observations +=
       obs_manager_->FilterPoints3D(options.filter_max_reproj_error,
                                    options.filter_min_tri_angle,
-                                   point3D_ids);
+                                   point3D_ids,
+                                   options.enable_refraction);
 
   return report;
 }
@@ -1227,7 +1344,7 @@ void IncrementalMapper::IterativeGlobalRefinement(
     if (normalize_reconstruction && !options.use_prior_position) {
       // Normalize scene for numerical stability and
       // to avoid large scale changes in the viewer.
-      reconstruction_->Normalize();
+      reconstruction_->Normalize(/*fixed_scale=*/options.enable_refraction);
     }
     size_t num_changed_observations = CompleteAndMergeTracks(tri_options);
     num_changed_observations += FilterPoints(options);
@@ -1278,7 +1395,9 @@ size_t IncrementalMapper::FilterPoints(const Options& options) {
   THROW_CHECK_NOTNULL(obs_manager_);
   THROW_CHECK(options.Check());
   const size_t num_filtered_observations = obs_manager_->FilterAllPoints3D(
-      options.filter_max_reproj_error, options.filter_min_tri_angle);
+      options.filter_max_reproj_error,
+      options.filter_min_tri_angle,
+      options.enable_refraction);
   VLOG(1) << "=> Filtered observations: " << num_filtered_observations;
   return num_filtered_observations;
 }

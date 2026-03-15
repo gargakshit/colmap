@@ -56,6 +56,7 @@ class FeatureMatcherCache {
   void AccessDatabase(const std::function<void(Database& database)>& func);
 
   const Camera& GetCamera(camera_t camera_id);
+  const Camera& GetBestFitCamera(camera_t camera_id);
   const Frame& GetFrame(frame_t frame_id);
   const Image& GetImage(image_t image_id);
   const PosePrior* FindImagePosePriorOrNull(image_t image_id);
@@ -102,6 +103,7 @@ class FeatureMatcherCache {
   const std::shared_ptr<Database> database_;
   std::mutex database_mutex_;
   std::unique_ptr<std::unordered_map<camera_t, Camera>> cameras_cache_;
+  std::unique_ptr<std::unordered_map<camera_t, Camera>> best_fit_cameras_cache_;
   std::unique_ptr<std::unordered_map<frame_t, Frame>> frames_cache_;
   std::unique_ptr<std::unordered_map<image_t, Image>> images_cache_;
   std::unique_ptr<std::unordered_map<image_t, PosePrior>> pose_priors_cache_;

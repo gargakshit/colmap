@@ -200,6 +200,8 @@ void OptionManager::AddFeatureExtractionOptions() {
 
   AddDefaultOption("ImageReader.mask_path", &image_reader->mask_path);
   AddDefaultOption("ImageReader.camera_model", &image_reader->camera_model);
+  AddDefaultOption("ImageReader.camera_refrac_model",
+                   &image_reader->camera_refrac_model);
   AddDefaultOption("ImageReader.single_camera", &image_reader->single_camera);
   AddDefaultOption("ImageReader.single_camera_per_folder",
                    &image_reader->single_camera_per_folder);
@@ -208,6 +210,8 @@ void OptionManager::AddFeatureExtractionOptions() {
   AddDefaultOption("ImageReader.existing_camera_id",
                    &image_reader->existing_camera_id);
   AddDefaultOption("ImageReader.camera_params", &image_reader->camera_params);
+  AddDefaultOption("ImageReader.camera_refrac_params",
+                   &image_reader->camera_refrac_params);
   AddDefaultOption("ImageReader.default_focal_length_factor",
                    &image_reader->default_focal_length_factor);
   AddDefaultOption("ImageReader.camera_mask_path",
@@ -325,6 +329,8 @@ void OptionManager::AddTwoViewGeometryOptions() {
                    &two_view_geometry->multiple_models);
   AddDefaultOption("TwoViewGeometry.compute_relative_pose",
                    &two_view_geometry->compute_relative_pose);
+  AddDefaultOption("TwoViewGeometry.enable_refraction",
+                   &two_view_geometry->enable_refraction);
   AddDefaultOption("TwoViewGeometry.detect_watermark",
                    &two_view_geometry->detect_watermark);
   AddDefaultOption("TwoViewGeometry.multiple_ignore_watermark",
@@ -481,6 +487,10 @@ void OptionManager::AddBundleAdjustmentOptions() {
                    &bundle_adjustment->refine_principal_point);
   AddDefaultOption("BundleAdjustment.refine_extra_params",
                    &bundle_adjustment->refine_extra_params);
+  AddDefaultOption("BundleAdjustment.enable_refraction",
+                   &bundle_adjustment->enable_refraction);
+  AddDefaultOption("BundleAdjustment.refine_refrac_params",
+                   &bundle_adjustment->refine_refrac_params);
   AddDefaultOption("BundleAdjustment.refine_rig_from_world",
                    &bundle_adjustment->refine_rig_from_world);
   AddDefaultOption("BundleAdjustment.refine_sensor_from_rig",
@@ -564,6 +574,8 @@ void OptionManager::AddMapperOptions() {
                    &mapper->ba_refine_principal_point);
   AddDefaultOption("Mapper.ba_refine_extra_params",
                    &mapper->ba_refine_extra_params);
+  AddDefaultOption("Mapper.ba_refine_refrac_params",
+                   &mapper->ba_refine_refrac_params);
   AddDefaultOption("Mapper.ba_refine_sensor_from_rig",
                    &mapper->ba_refine_sensor_from_rig);
   AddDefaultOption("Mapper.ba_local_function_tolerance",
@@ -636,6 +648,7 @@ void OptionManager::AddMapperOptions() {
   AddDefaultOption("Mapper.constant_camera_list_path",
                    &mapper_constant_camera_list_path_);
   AddDefaultOption("Mapper.max_runtime_seconds", &mapper->max_runtime_seconds);
+  AddDefaultOption("Mapper.enable_refraction", &mapper->enable_refraction);
 
   // IncrementalTriangulator.
   AddDefaultOption("Mapper.tri_max_transitivity",

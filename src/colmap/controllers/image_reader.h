@@ -67,6 +67,13 @@ struct ImageReaderOptions {
   // will be extracted from EXIF, i.e. principal point and focal length.
   std::string camera_params;
 
+  // Name of the refractive camera model.
+  std::string camera_refrac_model = "NONE";
+
+  // Manual specification of refractive camera parameters. If empty, the
+  // camera remains non-refractive.
+  std::string camera_refrac_params;
+
   // Whether to use the same camera for all images.
   bool single_camera = false;
 

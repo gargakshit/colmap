@@ -361,6 +361,23 @@ TEST_P(ParameterizedReaderWriterTests, LegacyWithoutRigsAndFrames) {
   EXPECT_EQ(orig.Points3D(), test.Points3D());
 }
 
+TEST_P(ParameterizedReaderWriterTests, RefractiveCameraRoundtrip) {
+  std::unique_ptr<ReaderWriter> reader_writer = GetParam()();
+
+  Reconstruction orig;
+  Camera camera = Camera::CreateFromModelId(
+      1, SimplePinholeCameraModel::model_id, 1000.0, 1280, 960);
+  camera.refrac_model_id = CameraRefracModelId::kFlatPort;
+  camera.refrac_params = {0.0, 0.0, 1.0, 0.05, 0.007, 1.0, 1.49, 1.333};
+  orig.AddCamera(camera);
+
+  reader_writer->WriteCameras(orig);
+
+  Reconstruction test;
+  reader_writer->ReadCameras(test);
+  EXPECT_EQ(orig.Cameras(), test.Cameras());
+}
+
 INSTANTIATE_TEST_SUITE_P(
     ReaderWriterTests,
     ParameterizedReaderWriterTests,

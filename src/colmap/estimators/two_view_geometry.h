@@ -101,6 +101,10 @@ struct TwoViewGeometryOptions {
   // Whether to compute the relative pose between the two views.
   bool compute_relative_pose = false;
 
+  // Whether to use refractive two-view geometry when both cameras provide a
+  // refractive model.
+  bool enable_refraction = false;
+
   // Recursively estimate multiple configurations by removing the previous set
   // of inliers from the matches until not enough inliers are found. Inlier
   // matches are concatenated and the configuration type is `MULTIPLE` if
@@ -192,6 +196,23 @@ TwoViewGeometry EstimateCalibratedTwoViewGeometry(
     const std::vector<Eigen::Vector2d>& points2,
     const FeatureMatches& matches,
     const TwoViewGeometryOptions& options);
+
+Camera BestFitNonRefracCamera(CameraModelId tgt_model_id,
+                              const Camera& camera,
+                              double approx_depth);
+
+TwoViewGeometry EstimateRefractiveTwoViewGeometryUseBestFit(
+    const Camera& best_fit_camera1,
+    const std::vector<Eigen::Vector2d>& points1,
+    const std::vector<Camera>& virtual_cameras1,
+    const std::vector<Rigid3d>& virtual_from_reals1,
+    const Camera& best_fit_camera2,
+    const std::vector<Eigen::Vector2d>& points2,
+    const std::vector<Camera>& virtual_cameras2,
+    const std::vector<Rigid3d>& virtual_from_reals2,
+    const FeatureMatches& matches,
+    const TwoViewGeometryOptions& options,
+    bool refine = true);
 
 // Detect if inlier matches are caused by a watermark, where a
 // watermark causes a pure translation in the border of the image.

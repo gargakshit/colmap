@@ -76,6 +76,10 @@ BundleAdjustmentWidget::BundleAdjustmentWidget(MainWindow* main_window,
                 "refine_principal_point");
   AddOptionBool(&options->bundle_adjustment->refine_extra_params,
                 "refine_extra_params");
+  AddOptionBool(&options->bundle_adjustment->enable_refraction,
+                "enable_refraction");
+  AddOptionBool(&options->bundle_adjustment->refine_refrac_params,
+                "refine_refrac_params");
   AddOptionBool(&options->bundle_adjustment->refine_rig_from_world,
                 "refine_rig_from_world");
   AddOptionBool(&options->bundle_adjustment->refine_sensor_from_rig,

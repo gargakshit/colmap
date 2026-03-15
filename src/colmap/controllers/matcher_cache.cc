@@ -29,6 +29,8 @@
 
 #include "colmap/controllers/matcher_cache.h"
 
+#include "colmap/estimators/two_view_geometry.h"
+
 namespace colmap {
 
 FeatureMatcherCache::FeatureMatcherCache(
@@ -81,6 +83,31 @@ void FeatureMatcherCache::AccessDatabase(
 const Camera& FeatureMatcherCache::GetCamera(const camera_t camera_id) {
   MaybeLoadCameras();
   return cameras_cache_->at(camera_id);
+}
+
+const Camera& FeatureMatcherCache::GetBestFitCamera(const camera_t camera_id) {
+  MaybeLoadCameras();
+
+  std::lock_guard<std::mutex> lock(database_mutex_);
+  if (!best_fit_cameras_cache_) {
+    best_fit_cameras_cache_ =
+        std::make_unique<std::unordered_map<camera_t, Camera>>();
+    best_fit_cameras_cache_->reserve(cameras_cache_->size());
+  }
+
+  auto [it, inserted] = best_fit_cameras_cache_->try_emplace(camera_id);
+  if (inserted) {
+    const Camera& camera = cameras_cache_->at(camera_id);
+    if (camera.IsCameraRefractive()) {
+      constexpr double kApproxDepth = 5.0;
+      it->second =
+          BestFitNonRefracCamera(CameraModelId::kOpenCV, camera, kApproxDepth);
+    } else {
+      it->second = camera;
+    }
+  }
+
+  return it->second;
 }
 
 const Frame& FeatureMatcherCache::GetFrame(const frame_t frame_id) {

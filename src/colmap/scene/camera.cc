@@ -30,6 +30,7 @@
 #include "colmap/scene/camera.h"
 
 #include "colmap/sensor/models.h"
+#include "colmap/sensor/models_refrac.h"
 #include "colmap/util/logging.h"
 #include "colmap/util/misc.h"
 
@@ -44,6 +45,7 @@ Camera Camera::CreateFromModelId(camera_t camera_id,
   Camera camera;
   camera.camera_id = camera_id;
   camera.model_id = model_id;
+  camera.refrac_model_id = CameraRefracModelId::kInvalid;
   camera.width = width;
   camera.height = height;
   camera.params =
@@ -82,12 +84,25 @@ double Camera::MeanFocalLength() const {
 
 std::string Camera::ParamsToString() const { return VectorToCSV(params); }
 
+std::string Camera::RefracParamsToString() const {
+  return VectorToCSV(refrac_params);
+}
+
 bool Camera::SetParamsFromString(const std::string& string) {
   std::vector<double> new_camera_params = CSVToVector<double>(string);
   if (!CameraModelVerifyParams(model_id, new_camera_params)) {
     return false;
   }
   params = std::move(new_camera_params);
+  return true;
+}
+
+bool Camera::SetRefracParamsFromString(const std::string& string) {
+  std::vector<double> new_refrac_params = CSVToVector<double>(string);
+  if (!CameraRefracModelVerifyParams(refrac_model_id, new_refrac_params)) {
+    return false;
+  }
+  refrac_params = std::move(new_refrac_params);
   return true;
 }
 
@@ -98,6 +113,10 @@ bool Camera::IsUndistorted() const {
     }
   }
   return true;
+}
+
+bool Camera::IsCameraRefractive() const {
+  return refrac_model_id != CameraRefracModelId::kInvalid;
 }
 
 void Camera::Rescale(const double scale) {
@@ -122,6 +141,65 @@ void Camera::Rescale(const size_t new_width, const size_t new_height) {
   SetPrincipalPointX(scale_x * PrincipalPointX());
   SetPrincipalPointY(scale_y * PrincipalPointY());
   ScaleFocalLengths(scale_x, scale_y);
+}
+
+const std::vector<size_t>& Camera::OptimizableRefracParamsIdxs() const {
+  return CameraRefracModelOptimizableParamsIdxs(refrac_model_id);
+}
+
+Eigen::Vector3d Camera::RefractionAxis() const {
+  return CameraRefracModelRefractionAxis(refrac_model_id, refrac_params);
+}
+
+Eigen::Vector3d Camera::VirtualCameraCenter(const Ray3D& ray_refrac) const {
+  Eigen::Vector3d virtual_cam_center;
+  IntersectLinesWithTolerance<double>(Eigen::Vector3d::Zero(),
+                                      RefractionAxis(),
+                                      ray_refrac.ori,
+                                      -ray_refrac.dir,
+                                      virtual_cam_center);
+  return virtual_cam_center;
+}
+
+Camera Camera::VirtualCamera(const Eigen::Vector2d& image_point,
+                             const Eigen::Vector2d& cam_point) const {
+  Camera virtual_camera;
+  virtual_camera.model_id = CameraModelId::kSimplePinhole;
+  virtual_camera.refrac_model_id = CameraRefracModelId::kInvalid;
+  virtual_camera.width = width;
+  virtual_camera.height = height;
+
+  const double f = MeanFocalLength();
+  const double cx = image_point.x() - f * cam_point.x();
+  const double cy = image_point.y() - f * cam_point.y();
+  virtual_camera.params = {f, cx, cy};
+  return virtual_camera;
+}
+
+void Camera::ComputeVirtual(const Eigen::Vector2d& point2D,
+                            Camera& virtual_camera,
+                            Rigid3d& virtual_from_real) const {
+  const auto ray_refrac = CamFromImgRefrac(point2D);
+  THROW_CHECK(ray_refrac.has_value());
+  const Eigen::Quaterniond virtual_from_real_rotation(1.0, 0.0, 0.0, 0.0);
+  const Eigen::Vector3d virtual_cam_center = VirtualCameraCenter(*ray_refrac);
+  virtual_from_real = Rigid3d(virtual_from_real_rotation,
+                              virtual_from_real_rotation * -virtual_cam_center);
+  virtual_camera = VirtualCamera(point2D, ray_refrac->dir.hnormalized());
+}
+
+void Camera::ComputeVirtuals(const std::vector<Eigen::Vector2d>& points2D,
+                             std::vector<Camera>& virtual_cameras,
+                             std::vector<Rigid3d>& virtual_from_reals) const {
+  virtual_cameras.reserve(points2D.size());
+  virtual_from_reals.reserve(points2D.size());
+  for (const Eigen::Vector2d& point : points2D) {
+    Camera virtual_camera;
+    Rigid3d virtual_from_real;
+    ComputeVirtual(point, virtual_camera, virtual_from_real);
+    virtual_cameras.push_back(virtual_camera);
+    virtual_from_reals.push_back(virtual_from_real);
+  }
 }
 
 std::ostream& operator<<(std::ostream& stream, const Camera& camera) {

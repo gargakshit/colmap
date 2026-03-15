@@ -36,53 +36,21 @@
 #include "colmap/util/logging.h"
 #include "colmap/util/threading.h"
 
+#include <algorithm>
 #include <fstream>
+#include <numeric>
 
 #include <Eigen/Core>
 #include <boost/heap/fibonacci_heap.hpp>
 #include <faiss/Clustering.h>
 #include <faiss/IndexFlat.h>
 #include <faiss/IndexIVF.h>
-#include <faiss/index_factory.h>
 #include <faiss/index_io.h>
 #include <omp.h>
 
 namespace colmap {
 namespace retrieval {
 namespace {
-
-std::unique_ptr<faiss::IndexIVF> BuildFaissIndex(
-    const VisualIndex::BuildOptions& options,
-    const Eigen::RowMajorMatrixXf& visual_words) {
-  const int64_t num_centroids = std::min<int64_t>(
-      visual_words.rows(), 2 * std::sqrt(visual_words.rows()));
-  const int64_t spectral_hash_dim =
-      std::min<int64_t>(visual_words.rows(), visual_words.cols() / 2);
-  std::ostringstream index_type;
-  index_type << "IVF" << num_centroids << ",ITQ" << spectral_hash_dim << ",SH";
-  VLOG(2) << "Training " << index_type.str()
-          << " search index for visual words";
-  const auto index_factory_verbose = faiss::index_factory_verbose;
-  faiss::index_factory_verbose = VLOG_IS_ON(3);
-  auto index = std::unique_ptr<faiss::IndexIVF>(dynamic_cast<faiss::IndexIVF*>(
-      faiss::index_factory(visual_words.cols(), index_type.str().c_str())));
-  faiss::index_factory_verbose = index_factory_verbose;
-
-#pragma omp parallel num_threads(1)
-  {
-    omp_set_num_threads(GetEffectiveNumThreads(options.num_threads));
-#ifdef _MSC_VER
-    omp_set_nested(1);
-#else
-    omp_set_max_active_levels(1);
-#endif
-
-    index->train(visual_words.rows(), visual_words.data());
-    index->add(visual_words.rows(), visual_words.data());
-  }
-
-  return index;
-}
 
 template <int kDescDim = 128, int kEmbeddingDim = 64>
 class FaissVisualIndex : public VisualIndex {
@@ -94,6 +62,9 @@ class FaissVisualIndex : public VisualIndex {
       : prepared_(false), feature_type_(FeatureExtractorType::UNDEFINED) {}
 
   size_t NumVisualWords() const override {
+    if (visual_words_.rows() > 0) {
+      return visual_words_.rows();
+    }
     return (index_ == nullptr) ? 0 : index_->ntotal;
   }
 
@@ -441,12 +412,12 @@ class FaissVisualIndex : public VisualIndex {
     const Eigen::RowMajorMatrixXf visual_words =
         Quantize(options, descriptors.data);
     THROW_CHECK_EQ(visual_words.cols(), kDescDim);
-
-    index_ = BuildFaissIndex(options, visual_words);
+    visual_words_ = visual_words;
+    index_.reset();
 
     // Initialize a new inverted index.
     inverted_index_ = InvertedIndexType();
-    inverted_index_.Initialize(index_->ntotal);
+    inverted_index_.Initialize(visual_words_.rows());
     VLOG(2) << "Initialized inverted index";
 
     // Generate descriptor projection matrix.
@@ -463,42 +434,61 @@ class FaissVisualIndex : public VisualIndex {
     VLOG(2) << "Computed hamming embeddings";
   }
 
-  void ReadFromFaiss(const std::filesystem::path& path,
-                     long offset,
-                     FeatureExtractorType feature_type) override {
+  void ReadFromFile(const std::filesystem::path& path,
+                    long offset,
+                    int file_version,
+                    FeatureExtractorType feature_type) override {
     feature_type_ = feature_type;
+    visual_words_.resize(0, 0);
+    index_.reset();
 
-    FILE* fin = nullptr;
-#ifdef _MSC_VER
-    THROW_CHECK_EQ(fopen_s(&fin, path.string().c_str(), "rb"), 0);
-#else
-    fin = fopen(path.string().c_str(), "rb");
-#endif
-    THROW_CHECK_NOTNULL(fin);
-    fseek(fin, offset, SEEK_SET);
-    index_ = std::unique_ptr<faiss::IndexIVF>(dynamic_cast<faiss::IndexIVF*>(
-        THROW_CHECK_NOTNULL(faiss::read_index(fin))));
-    offset = ftell(fin);
-    fclose(fin);
-
-    // Read the inverted index.
     std::ifstream file(path, std::ios::binary);
     THROW_CHECK_FILE_OPEN(file, path);
     file.seekg(offset, std::ios::beg);
+
+    if (file_version >= 3) {
+      int num_visual_words = 0;
+      file.read(reinterpret_cast<char*>(&num_visual_words), sizeof(int));
+      visual_words_.resize(num_visual_words, kDescDim);
+      if (num_visual_words > 0) {
+        file.read(reinterpret_cast<char*>(visual_words_.data()),
+                  sizeof(float) * visual_words_.size());
+      }
+    } else {
+      file.close();
+
+      FILE* fin = nullptr;
+#ifdef _MSC_VER
+      THROW_CHECK_EQ(fopen_s(&fin, path.string().c_str(), "rb"), 0);
+#else
+      fin = fopen(path.string().c_str(), "rb");
+#endif
+      THROW_CHECK_NOTNULL(fin);
+      fseek(fin, offset, SEEK_SET);
+      index_ = std::unique_ptr<faiss::IndexIVF>(dynamic_cast<faiss::IndexIVF*>(
+          THROW_CHECK_NOTNULL(faiss::read_index(fin))));
+      offset = ftell(fin);
+      fclose(fin);
+
+      file.open(path, std::ios::binary);
+      THROW_CHECK_FILE_OPEN(file, path);
+      file.seekg(offset, std::ios::beg);
+    }
+
     inverted_index_.Read(&file);
     image_ids_.clear();
     inverted_index_.GetImageIds(&image_ids_);
   }
 
   void Write(const std::filesystem::path& path) const override {
-    THROW_CHECK_NOTNULL(index_);
+    THROW_CHECK_EQ(visual_words_.cols(), kDescDim);
 
     // Write index metadata header.
 
     {
       std::ofstream file(path, std::ios::binary);
       THROW_CHECK_FILE_OPEN(file, path);
-      const int kFileVersion = 2;
+      const int kFileVersion = 3;
       file.write(reinterpret_cast<const char*>(&kFileVersion), sizeof(int));
       const int desc_dim = kDescDim;
       file.write(reinterpret_cast<const char*>(&desc_dim), sizeof(int));
@@ -506,27 +496,13 @@ class FaissVisualIndex : public VisualIndex {
       file.write(reinterpret_cast<const char*>(&embedding_dim), sizeof(int));
       const int feature_type = static_cast<int>(feature_type_);
       file.write(reinterpret_cast<const char*>(&feature_type), sizeof(int));
-    }
-
-    // Write the visual words search index.
-
-    {
-      FILE* fout = nullptr;
-#ifdef _MSC_VER
-      THROW_CHECK_EQ(fopen_s(&fout, path.string().c_str(), "ab"), 0);
-#else
-      fout = fopen(path.string().c_str(), "ab");
-#endif
-      THROW_CHECK_NOTNULL(fout);
-      faiss::write_index(index_.get(), fout);
-      fclose(fout);
-    }
-
-    // Write the inverted index.
-
-    {
-      std::ofstream file(path, std::ios::binary | std::ios::app);
-      THROW_CHECK_FILE_OPEN(file, path);
+      const int num_visual_words = visual_words_.rows();
+      file.write(reinterpret_cast<const char*>(&num_visual_words),
+                 sizeof(int));
+      if (num_visual_words > 0) {
+        file.write(reinterpret_cast<const char*>(visual_words_.data()),
+                   sizeof(float) * visual_words_.size());
+      }
       inverted_index_.Write(&file);
     }
   }
@@ -609,16 +585,61 @@ class FaissVisualIndex : public VisualIndex {
     THROW_CHECK_EQ(descriptors.cols(), kDescDim);
     THROW_CHECK_GT(descriptors.rows(), 0);
     THROW_CHECK_GT(num_neighbors, 0);
-    THROW_CHECK_NOTNULL(index_);
+    THROW_CHECK(visual_words_.rows() > 0 || index_ != nullptr);
 
-    WordIds word_ids(descriptors.rows(), num_neighbors);
-    Eigen::RowMajorMatrixXf distances(descriptors.rows(), num_neighbors);
+    const int num_visual_words = visual_words_.rows() > 0
+                                     ? visual_words_.rows()
+                                     : static_cast<int>(index_->ntotal);
+    const int num_eff_neighbors = std::min<int>(num_neighbors, num_visual_words);
+    if (num_eff_neighbors <= 0) {
+      return WordIds(descriptors.rows(), 0);
+    }
 
-    faiss::IVFSearchParameters search_params;
-    search_params.nprobe = num_checks;
+    WordIds word_ids(descriptors.rows(), num_eff_neighbors);
+    if (visual_words_.rows() > 0) {
+      std::vector<int> candidate_indices(visual_words_.rows());
+      std::iota(candidate_indices.begin(), candidate_indices.end(), 0);
+      std::vector<float> candidate_dists(visual_words_.rows());
 
-#pragma omp parallel num_threads(1)
-    {
+      for (Eigen::Index desc_idx = 0; desc_idx < descriptors.rows(); ++desc_idx) {
+        const auto descriptor = descriptors.row(desc_idx);
+        for (Eigen::Index word_idx = 0; word_idx < visual_words_.rows();
+             ++word_idx) {
+          candidate_dists[word_idx] =
+              (descriptor - visual_words_.row(word_idx)).squaredNorm();
+        }
+
+        if (num_eff_neighbors < visual_words_.rows()) {
+          std::nth_element(candidate_indices.begin(),
+                           candidate_indices.begin() + num_eff_neighbors,
+                           candidate_indices.end(),
+                           [&](const int lhs, const int rhs) {
+                             if (candidate_dists[lhs] == candidate_dists[rhs]) {
+                               return lhs < rhs;
+                             }
+                             return candidate_dists[lhs] < candidate_dists[rhs];
+                           });
+        }
+        std::sort(candidate_indices.begin(),
+                  candidate_indices.begin() + num_eff_neighbors,
+                  [&](const int lhs, const int rhs) {
+                    if (candidate_dists[lhs] == candidate_dists[rhs]) {
+                      return lhs < rhs;
+                    }
+                    return candidate_dists[lhs] < candidate_dists[rhs];
+                  });
+
+        for (int neighbor_idx = 0; neighbor_idx < num_eff_neighbors;
+             ++neighbor_idx) {
+          word_ids(desc_idx, neighbor_idx) = candidate_indices[neighbor_idx];
+        }
+      }
+    } else {
+      Eigen::RowMajorMatrixXf distances(descriptors.rows(), num_eff_neighbors);
+
+      faiss::IVFSearchParameters search_params;
+      search_params.nprobe = num_checks;
+
       omp_set_num_threads(GetEffectiveNumThreads(num_threads));
 #ifdef _MSC_VER
       omp_set_nested(1);
@@ -628,7 +649,7 @@ class FaissVisualIndex : public VisualIndex {
 
       index_->search(descriptors.rows(),
                      descriptors.data(),
-                     num_neighbors,
+                     num_eff_neighbors,
                      distances.data(),
                      word_ids.data(),
                      &search_params);
@@ -639,7 +660,7 @@ class FaissVisualIndex : public VisualIndex {
 
   // The search structure on the quantized descriptor space.
   std::unique_ptr<faiss::IndexIVF> index_;
-  std::unique_ptr<faiss::Index> quantizer_;
+  Eigen::RowMajorMatrixXf visual_words_;
 
   // The inverted index of the database.
   InvertedIndexType inverted_index_;
@@ -687,7 +708,7 @@ std::unique_ptr<VisualIndex> VisualIndex::Read(
   // We detect legacy indices based on a file version mismatch, which works
   // as long as we do not increment the file version beyond the count of
   // visual words in a legacy file (which we do not expect to happen).
-  THROW_CHECK(file_version == 1 || file_version == 2)
+  THROW_CHECK(file_version == 1 || file_version == 2 || file_version == 3)
       << "Failed to read faiss index. This may be caused by reading a legacy "
          "flann-based index, because COLMAP switched from flann to faiss in "
          "May 2025. If you want to upgrade your existing flann-based index "
@@ -710,7 +731,8 @@ std::unique_ptr<VisualIndex> VisualIndex::Read(
   }
 
   auto visual_index = VisualIndex::Create(desc_dim, embedding_dim);
-  visual_index->ReadFromFaiss(resolved_path, file.tellg(), feature_type);
+  visual_index->ReadFromFile(
+      resolved_path, file.tellg(), file_version, feature_type);
 
   return visual_index;
 }

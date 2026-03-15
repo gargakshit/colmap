@@ -29,11 +29,15 @@
 
 #pragma once
 
+#include "colmap/geometry/rigid3.h"
 #include "colmap/sensor/models.h"
+#include "colmap/sensor/models_refrac.h"
+#include "colmap/sensor/ray3d.h"
 #include "colmap/util/eigen_alignment.h"
 #include "colmap/util/logging.h"
 #include "colmap/util/types.h"
 
+#include <optional>
 #include <vector>
 
 #include <Eigen/Geometry>
@@ -51,6 +55,10 @@ struct Camera {
   // The identifier of the camera model.
   CameraModelId model_id = CameraModelId::kInvalid;
 
+  // The identifier of the refractive camera model. `kInvalid` means that the
+  // camera follows the standard perspective image formation path.
+  CameraRefracModelId refrac_model_id = CameraRefracModelId::kInvalid;
+
   // The dimensions of the image, 0 if not initialized.
   size_t width = 0;
   size_t height = 0;
@@ -58,6 +66,9 @@ struct Camera {
   // The focal length, principal point, and extra parameters. If the camera
   // model is not specified, this vector is empty.
   std::vector<double> params;
+
+  // Refractive camera model parameters. Empty for non-refractive cameras.
+  std::vector<double> refrac_params;
 
   // Whether there is a good prior for the focal length, e.g. manually provided,
   // extracted from EXIF, or from view graph calibration.
@@ -77,6 +88,7 @@ struct Camera {
                                     size_t height);
 
   inline const std::string& ModelName() const;
+  inline const std::string& RefracModelName() const;
 
   inline sensor_t SensorId() const;
 
@@ -108,19 +120,29 @@ struct Camera {
 
   // Get human-readable information about the parameter vector ordering.
   inline const std::string& ParamsInfo() const;
+  inline const std::string& RefracParamsInfo() const;
 
   // Concatenate parameters as comma-separated list.
   std::string ParamsToString() const;
+  std::string RefracParamsToString() const;
 
   // Set camera parameters from comma-separated list.
   bool SetParamsFromString(const std::string& string);
+
+  // Set refractive camera parameters from comma-separated list.
+  bool SetRefracParamsFromString(const std::string& string);
 
   // Check whether parameters are valid, i.e. the parameter vector has
   // the correct dimensions that match the specified camera model.
   inline bool VerifyParams() const;
 
+  // Check whether refractive parameters match the selected refractive model.
+  inline bool VerifyRefracParams() const;
+
   // Check whether camera is already undistorted.
   bool IsUndistorted() const;
+
+  bool IsCameraRefractive() const;
 
   // Check whether camera has bogus parameters.
   inline bool HasBogusParams(double min_focal_length_ratio,
@@ -138,10 +160,29 @@ struct Camera {
   inline std::optional<Eigen::Vector2d> ImgFromCam(
       const Eigen::Vector3d& cam_point) const;
 
+  inline std::optional<Ray3D> CamFromImgRefrac(
+      const Eigen::Vector2d& image_point) const;
+  inline std::optional<Eigen::Vector3d> CamFromImgRefracPoint(
+      const Eigen::Vector2d& image_point, double depth) const;
+  inline std::optional<Eigen::Vector2d> ImgFromCamRefrac(
+      const Eigen::Vector3d& cam_point) const;
+
   // Rescale camera dimensions and accordingly the focal length and
   // and the principal point.
   void Rescale(double scale);
   void Rescale(size_t new_width, size_t new_height);
+
+  const std::vector<size_t>& OptimizableRefracParamsIdxs() const;
+  Eigen::Vector3d RefractionAxis() const;
+  Eigen::Vector3d VirtualCameraCenter(const Ray3D& ray_refrac) const;
+  Camera VirtualCamera(const Eigen::Vector2d& image_point,
+                       const Eigen::Vector2d& cam_point) const;
+  void ComputeVirtual(const Eigen::Vector2d& point2D,
+                      Camera& virtual_camera,
+                      Rigid3d& virtual_from_real) const;
+  void ComputeVirtuals(const std::vector<Eigen::Vector2d>& points2D,
+                       std::vector<Camera>& virtual_cameras,
+                       std::vector<Rigid3d>& virtual_from_reals) const;
 
   inline bool operator==(const Camera& other) const;
   inline bool operator!=(const Camera& other) const;
@@ -158,6 +199,10 @@ std::ostream& operator<<(std::ostream& stream, const Camera& camera);
 
 const std::string& Camera::ModelName() const {
   return CameraModelIdToName(model_id);
+}
+
+const std::string& Camera::RefracModelName() const {
+  return CameraRefracModelIdToName(refrac_model_id);
 }
 
 sensor_t Camera::SensorId() const {
@@ -231,6 +276,10 @@ const std::string& Camera::ParamsInfo() const {
   return CameraModelParamsInfo(model_id);
 }
 
+const std::string& Camera::RefracParamsInfo() const {
+  return CameraRefracModelParamsInfo(refrac_model_id);
+}
+
 span<const size_t> Camera::FocalLengthIdxs() const {
   return CameraModelFocalLengthIdxs(model_id);
 }
@@ -245,6 +294,10 @@ span<const size_t> Camera::ExtraParamsIdxs() const {
 
 bool Camera::VerifyParams() const {
   return CameraModelVerifyParams(model_id, params);
+}
+
+bool Camera::VerifyRefracParams() const {
+  return CameraRefracModelVerifyParams(refrac_model_id, refrac_params);
 }
 
 bool Camera::HasBogusParams(const double min_focal_length_ratio,
@@ -273,10 +326,38 @@ std::optional<Eigen::Vector2d> Camera::ImgFromCam(
   return CameraModelImgFromCam(model_id, params, cam_point);
 }
 
+std::optional<Ray3D> Camera::CamFromImgRefrac(
+    const Eigen::Vector2d& image_point) const {
+  if (!IsCameraRefractive()) {
+    return std::nullopt;
+  }
+  return CameraRefracModelCamFromImg(
+      model_id, refrac_model_id, params, refrac_params, image_point);
+}
+
+std::optional<Eigen::Vector3d> Camera::CamFromImgRefracPoint(
+    const Eigen::Vector2d& image_point, double depth) const {
+  if (!IsCameraRefractive()) {
+    return std::nullopt;
+  }
+  return CameraRefracModelCamFromImgPoint(
+      model_id, refrac_model_id, params, refrac_params, image_point, depth);
+}
+
+std::optional<Eigen::Vector2d> Camera::ImgFromCamRefrac(
+    const Eigen::Vector3d& cam_point) const {
+  if (!IsCameraRefractive()) {
+    return std::nullopt;
+  }
+  return CameraRefracModelImgFromCam(
+      model_id, refrac_model_id, params, refrac_params, cam_point);
+}
+
 bool Camera::operator==(const Camera& other) const {
   return camera_id == other.camera_id && model_id == other.model_id &&
+         refrac_model_id == other.refrac_model_id &&
          width == other.width && height == other.height &&
-         params == other.params &&
+         params == other.params && refrac_params == other.refrac_params &&
          has_prior_focal_length == other.has_prior_focal_length;
 }
 

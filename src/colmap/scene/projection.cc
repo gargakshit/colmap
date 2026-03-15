@@ -36,10 +36,15 @@ namespace colmap {
 double CalculateSquaredReprojectionError(const Eigen::Vector2d& point2D,
                                          const Eigen::Vector3d& point3D,
                                          const Rigid3d& cam_from_world,
-                                         const Camera& camera) {
+                                         const Camera& camera,
+                                         const bool is_refractive) {
   const Eigen::Vector3d point3D_in_cam = cam_from_world * point3D;
-  const std::optional<Eigen::Vector2d> proj_point2D =
-      camera.ImgFromCam(point3D_in_cam);
+  std::optional<Eigen::Vector2d> proj_point2D;
+  if (is_refractive) {
+    proj_point2D = camera.ImgFromCamRefrac(point3D_in_cam);
+  } else {
+    proj_point2D = camera.ImgFromCam(point3D_in_cam);
+  }
   if (!proj_point2D) {
     return std::numeric_limits<double>::max();
   }
@@ -50,10 +55,15 @@ double CalculateSquaredReprojectionError(
     const Eigen::Vector2d& point2D,
     const Eigen::Vector3d& point3D,
     const Eigen::Matrix3x4d& cam_from_world,
-    const Camera& camera) {
+    const Camera& camera,
+    const bool is_refractive) {
   const Eigen::Vector3d point3D_in_cam = cam_from_world * point3D.homogeneous();
-  const std::optional<Eigen::Vector2d> proj_point2D =
-      camera.ImgFromCam(point3D_in_cam);
+  std::optional<Eigen::Vector2d> proj_point2D;
+  if (is_refractive) {
+    proj_point2D = camera.ImgFromCamRefrac(point3D_in_cam);
+  } else {
+    proj_point2D = camera.ImgFromCam(point3D_in_cam);
+  }
   if (!proj_point2D) {
     return std::numeric_limits<double>::max();
   }

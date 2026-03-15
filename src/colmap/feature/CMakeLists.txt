@@ -111,6 +111,9 @@ COLMAP_ADD_TEST(
     SRCS index_test.cc
     LINK_LIBS colmap_feature
 )
+if(TESTS_ENABLED AND OPENMP_FOUND)
+    target_link_libraries(colmap_feature_index_test OpenMP::OpenMP_CXX)
+endif()
 COLMAP_ADD_TEST(
     NAME matcher_test
     SRCS matcher_test.cc

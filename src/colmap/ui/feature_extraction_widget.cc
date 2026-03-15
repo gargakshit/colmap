@@ -33,6 +33,7 @@
 #include "colmap/feature/aliked.h"
 #include "colmap/feature/sift.h"
 #include "colmap/sensor/models.h"
+#include "colmap/sensor/models_refrac.h"
 #include "colmap/ui/options_widget.h"
 #include "colmap/ui/thread_control_widget.h"
 #include "colmap/util/file.h"
@@ -272,6 +273,30 @@ QGroupBox* FeatureExtractionWidget::CreateCameraModelBox() {
   camera_params_text_ = new QLineEdit(this);
   camera_params_text_->setEnabled(false);
 
+  camera_refrac_model_ids_.clear();
+  camera_refrac_model_cb_ = new QComboBox(this);
+  camera_refrac_model_cb_->addItem(QString::fromStdString("NONE"));
+  camera_refrac_model_ids_.push_back(
+      static_cast<int>(CameraRefracModelId::kInvalid));
+
+#define CAMERA_REFRAC_MODEL_CASE(CameraRefracModel)                           \
+  camera_refrac_model_cb_->addItem(QString::fromStdString(                    \
+      CameraRefracModelIdToName(CameraRefracModel::refrac_model_id)));        \
+  camera_refrac_model_ids_.push_back(                                         \
+      static_cast<int>(CameraRefracModel::refrac_model_id));
+
+  CAMERA_REFRAC_MODEL_CASES
+
+#undef CAMERA_REFRAC_MODEL_CASE
+
+  camera_refrac_params_info_ = new QLabel(tr(""), this);
+  QPalette refrac_pal = QPalette(camera_refrac_params_info_->palette());
+  refrac_pal.setColor(QPalette::WindowText, QColor(130, 130, 130));
+  camera_refrac_params_info_->setPalette(refrac_pal);
+
+  camera_refrac_params_text_ = new QLineEdit(this);
+  camera_refrac_params_text_->setEnabled(false);
+
   single_camera_cb_ = new QCheckBox("Shared for all images", this);
   single_camera_cb_->setChecked(false);
 
@@ -283,11 +308,14 @@ QGroupBox* FeatureExtractionWidget::CreateCameraModelBox() {
   QVBoxLayout* vbox = new QVBoxLayout(box);
   vbox->addWidget(camera_model_cb_);
   vbox->addWidget(camera_params_info_);
+  vbox->addWidget(camera_refrac_model_cb_);
+  vbox->addWidget(camera_refrac_params_info_);
   vbox->addWidget(single_camera_cb_);
   vbox->addWidget(single_camera_per_folder_cb_);
   vbox->addWidget(camera_params_exif_rb_);
   vbox->addWidget(camera_params_custom_rb_);
   vbox->addWidget(camera_params_text_);
+  vbox->addWidget(camera_refrac_params_text_);
   vbox->addStretch(1);
 
   box->setLayout(vbox);
@@ -298,6 +326,10 @@ QGroupBox* FeatureExtractionWidget::CreateCameraModelBox() {
           (void (QComboBox::*)(int))&QComboBox::currentIndexChanged,
           this,
           &FeatureExtractionWidget::SelectCameraModel);
+  connect(camera_refrac_model_cb_,
+          (void (QComboBox::*)(int))&QComboBox::currentIndexChanged,
+          this,
+          &FeatureExtractionWidget::SelectCameraRefracModel);
   connect(camera_params_exif_rb_,
           &QRadioButton::clicked,
           camera_params_text_,
@@ -306,6 +338,8 @@ QGroupBox* FeatureExtractionWidget::CreateCameraModelBox() {
           &QRadioButton::clicked,
           camera_params_text_,
           &QLineEdit::setEnabled);
+
+  SelectCameraRefracModel(camera_refrac_model_cb_->currentIndex());
 
   return box;
 }
@@ -335,6 +369,17 @@ void FeatureExtractionWidget::ReadOptions() {
       options_->image_reader->single_camera_per_folder);
   camera_params_text_->setText(
       QString::fromStdString(options_->image_reader->camera_params));
+  const CameraRefracModelId refrac_model_id =
+      CameraRefracModelNameToId(options_->image_reader->camera_refrac_model);
+  for (size_t i = 0; i < camera_refrac_model_ids_.size(); ++i) {
+    if (camera_refrac_model_ids_[i] == static_cast<int>(refrac_model_id)) {
+      SelectCameraRefracModel(i);
+      camera_refrac_model_cb_->setCurrentIndex(i);
+      break;
+    }
+  }
+  camera_refrac_params_text_->setText(
+      QString::fromStdString(options_->image_reader->camera_refrac_params));
 }
 
 void FeatureExtractionWidget::WriteOptions() {
@@ -346,6 +391,17 @@ void FeatureExtractionWidget::WriteOptions() {
       single_camera_per_folder_cb_->isChecked();
   options_->image_reader->camera_params =
       camera_params_text_->text().toUtf8().constData();
+  const CameraRefracModelId refrac_model_id = static_cast<CameraRefracModelId>(
+      camera_refrac_model_ids_[camera_refrac_model_cb_->currentIndex()]);
+  if (refrac_model_id != CameraRefracModelId::kInvalid) {
+    options_->image_reader->camera_refrac_model =
+        CameraRefracModelIdToName(refrac_model_id);
+    options_->image_reader->camera_refrac_params =
+        camera_refrac_params_text_->text().toUtf8().constData();
+  } else {
+    options_->image_reader->camera_refrac_model = "NONE";
+    options_->image_reader->camera_refrac_params.clear();
+  }
 }
 
 void FeatureExtractionWidget::SelectCameraModel(const int idx) {
@@ -356,18 +412,40 @@ void FeatureExtractionWidget::SelectCameraModel(const int idx) {
                    CameraModelParamsInfo(model_id).c_str())));
 }
 
+void FeatureExtractionWidget::SelectCameraRefracModel(const int idx) {
+  const CameraRefracModelId refrac_model_id =
+      static_cast<CameraRefracModelId>(camera_refrac_model_ids_[idx]);
+  if (refrac_model_id != CameraRefracModelId::kInvalid) {
+    camera_refrac_params_info_->setText(QString::fromStdString(StringPrintf(
+        "<small>Refraction parameters: %s</small>",
+        CameraRefracModelParamsInfo(refrac_model_id).c_str())));
+    camera_refrac_params_text_->setEnabled(true);
+  } else {
+    camera_refrac_params_info_->setText(
+        QString::fromStdString("<small>No refraction model</small>"));
+    camera_refrac_params_text_->setEnabled(false);
+  }
+}
+
 void FeatureExtractionWidget::Extract() {
   // If the custom parameter radiobuttion is not checked, but the
   // parameters textbox contains parameters.
   const auto old_camera_params_text = camera_params_text_->text();
+  const auto old_camera_refrac_params_text = camera_refrac_params_text_->text();
   if (!camera_params_custom_rb_->isChecked()) {
     camera_params_text_->setText("");
+  }
+  if (camera_refrac_model_ids_[camera_refrac_model_cb_->currentIndex()] ==
+      static_cast<int>(CameraRefracModelId::kInvalid)) {
+    camera_refrac_params_text_->setText("");
   }
 
   WriteOptions();
 
   if (!ExistsCameraModelWithName(options_->image_reader->camera_model)) {
     QMessageBox::critical(this, "", tr("Camera model does not exist"));
+    camera_params_text_->setText(old_camera_params_text);
+    camera_refrac_params_text_->setText(old_camera_refrac_params_text);
     return;
   }
 
@@ -379,7 +457,32 @@ void FeatureExtractionWidget::Extract() {
   if (camera_params_custom_rb_->isChecked() &&
       !CameraModelVerifyParams(camera_code, camera_params)) {
     QMessageBox::critical(this, "", tr("Invalid camera parameters"));
+    camera_refrac_params_text_->setText(old_camera_refrac_params_text);
     return;
+  }
+
+  if (options_->image_reader->camera_refrac_model != "NONE") {
+    if (!ExistsCameraRefracModelWithName(
+            options_->image_reader->camera_refrac_model)) {
+      QMessageBox::critical(this, "", tr("Refractive camera model does not exist"));
+      camera_params_text_->setText(old_camera_params_text);
+      camera_refrac_params_text_->setText(old_camera_refrac_params_text);
+      return;
+    }
+
+    const auto camera_refrac_code =
+        CameraRefracModelNameToId(options_->image_reader->camera_refrac_model);
+    const std::vector<double> camera_refrac_params =
+        CSVToVector<double>(options_->image_reader->camera_refrac_params);
+    if (!CameraRefracModelVerifyParams(camera_refrac_code,
+                                       camera_refrac_params)) {
+      QMessageBox::critical(this,
+                            "",
+                            tr("Invalid refractive camera parameters"));
+      camera_params_text_->setText(old_camera_params_text);
+      camera_refrac_params_text_->setText(old_camera_refrac_params_text);
+      return;
+    }
   }
 
   QWidget* widget =
@@ -387,6 +490,7 @@ void FeatureExtractionWidget::Extract() {
   static_cast<ExtractionWidget*>(widget)->Run();
 
   camera_params_text_->setText(old_camera_params_text);
+  camera_refrac_params_text_->setText(old_camera_refrac_params_text);
 }
 
 }  // namespace colmap
