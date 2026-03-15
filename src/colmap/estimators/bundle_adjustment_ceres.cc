@@ -860,25 +860,52 @@ class DefaultBundleAdjuster : public CeresBundleAdjuster {
               loss_function_.get(),
               point3D.xyz.data(),
               camera.params.data(),
-              camera.refrac_params.data());
+                  camera.refrac_params.data());
         }
       } else if (!constant_rig_from_world && constant_sensor_from_rig) {
-        problem_->AddResidualBlock(
-            CreateCameraCostFunction<RigReprojErrorConstantRigCostFunctor>(
-                camera.model_id, point2D.xy, sensor_from_rig),
-            loss_function_.get(),
-            point3D.xyz.data(),
-            rig_from_world.params.data(),
-            camera.params.data());
+        if (!use_refrac) {
+          problem_->AddResidualBlock(
+              CreateCameraCostFunction<RigReprojErrorConstantRigCostFunctor>(
+                  camera.model_id, point2D.xy, sensor_from_rig),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              rig_from_world.params.data(),
+              camera.params.data());
+        } else {
+          problem_->AddResidualBlock(
+              CreateCameraRefracCostFunction<
+                  RigReprojErrorRefracConstantRigCostFunctor>(
+                  camera.model_id,
+                  camera.refrac_model_id,
+                  point2D.xy,
+                  sensor_from_rig),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              rig_from_world.params.data(),
+              camera.params.data(),
+              camera.refrac_params.data());
+        }
       } else {
-        problem_->AddResidualBlock(
-            CreateCameraCostFunction<RigReprojErrorCostFunctor>(camera.model_id,
-                                                                point2D.xy),
-            loss_function_.get(),
-            point3D.xyz.data(),
-            sensor_from_rig.params.data(),
-            rig_from_world.params.data(),
-            camera.params.data());
+        if (!use_refrac) {
+          problem_->AddResidualBlock(
+              CreateCameraCostFunction<RigReprojErrorCostFunctor>(
+                  camera.model_id, point2D.xy),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              sensor_from_rig.params.data(),
+              rig_from_world.params.data(),
+              camera.params.data());
+        } else {
+          problem_->AddResidualBlock(
+              CreateCameraRefracCostFunction<RigReprojErrorRefracCostFunctor>(
+                  camera.model_id, camera.refrac_model_id, point2D.xy),
+              loss_function_.get(),
+              point3D.xyz.data(),
+              sensor_from_rig.params.data(),
+              rig_from_world.params.data(),
+              camera.params.data(),
+              camera.refrac_params.data());
+        }
       }
     }
 

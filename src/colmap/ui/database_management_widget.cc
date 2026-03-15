@@ -31,6 +31,7 @@
 
 #include "colmap/scene/database.h"
 #include "colmap/sensor/models.h"
+#include "colmap/sensor/models_refrac.h"
 #include "colmap/util/file.h"
 #include "colmap/util/misc.h"
 
@@ -276,7 +277,7 @@ CameraTab::CameraTab(QWidget* parent) : QWidget(parent) {
   grid->addWidget(set_model_button, 0, 2, Qt::AlignRight);
 
   table_widget_ = new QTableWidget(this);
-  table_widget_->setColumnCount(6);
+  table_widget_->setColumnCount(8);
 
   QStringList table_header;
   table_header << "camera_id"
@@ -284,7 +285,9 @@ CameraTab::CameraTab(QWidget* parent) : QWidget(parent) {
                << "width"
                << "height"
                << "params"
-               << "prior_focal_length";
+               << "prior_focal_length"
+               << "refrac_model"
+               << "refrac_params";
   table_widget_->setHorizontalHeaderLabels(table_header);
 
   table_widget_->setShowGrid(true);
@@ -347,6 +350,19 @@ void CameraTab::Reload(const std::shared_ptr<Database>& database) {
         i,
         5,
         new QTableWidgetItem(QString::number(camera.has_prior_focal_length)));
+    std::string refrac_model_name = "NONE";
+    if (camera.refrac_model_id != CameraRefracModelId::kInvalid) {
+      refrac_model_name = camera.RefracModelName();
+    }
+    QTableWidgetItem* refrac_model_item =
+        new QTableWidgetItem(QString::fromStdString(refrac_model_name));
+    refrac_model_item->setFlags(Qt::ItemIsSelectable);
+    table_widget_->setItem(i, 6, refrac_model_item);
+    table_widget_->setItem(
+        i,
+        7,
+        new QTableWidgetItem(
+            QString::fromStdString(VectorToCSV(camera.refrac_params))));
   }
   table_widget_->resizeColumnsToContents();
 
@@ -361,6 +377,7 @@ void CameraTab::Clear() {
 void CameraTab::itemChanged(QTableWidgetItem* item) {
   Camera& camera = cameras_.at(item->row());
   const std::vector<double> prev_params = camera.params;
+  const std::vector<double> prev_refrac_params = camera.refrac_params;
 
   switch (item->column()) {
     // case 0: never change the camera ID
@@ -382,6 +399,14 @@ void CameraTab::itemChanged(QTableWidgetItem* item) {
     case 5:
       camera.has_prior_focal_length =
           static_cast<bool>(item->data(Qt::DisplayRole).toInt());
+      break;
+    case 7:
+      if (!camera.SetRefracParamsFromString(item->text().toUtf8().constData())) {
+        QMessageBox::critical(this, "", tr("Invalid refractive camera parameters."));
+        table_widget_->blockSignals(true);
+        item->setText(QString::fromStdString(VectorToCSV(prev_refrac_params)));
+        table_widget_->blockSignals(false);
+      }
       break;
     default:
       break;

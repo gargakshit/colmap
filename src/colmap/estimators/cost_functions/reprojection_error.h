@@ -470,6 +470,116 @@ class ReprojErrorRefracConstantPoseCostFunctor
       reproj_cost_;
 };
 
+template <typename CameraRefracModel, typename CameraModel>
+class RigReprojErrorRefracCostFunctor
+    : public AutoDiffCostFunctor<
+          RigReprojErrorRefracCostFunctor<CameraRefracModel, CameraModel>,
+          2,
+          3,
+          7,
+          7,
+          CameraModel::num_params,
+          CameraRefracModel::num_params> {
+ public:
+  explicit RigReprojErrorRefracCostFunctor(const Eigen::Vector2d& point2D)
+      : point2D_(point2D) {}
+
+  static ceres::CostFunction* Create(const Eigen::Vector2d& point2D) {
+    return new ceres::NumericDiffCostFunction<
+        RigReprojErrorRefracCostFunctor,
+        ceres::CENTRAL,
+        2,
+        3,
+        7,
+        7,
+        CameraModel::num_params,
+        CameraRefracModel::num_params>(
+        new RigReprojErrorRefracCostFunctor(point2D));
+  }
+
+  template <typename T>
+  bool operator()(const T* const point3D_in_world,
+                  const T* const cam_from_rig,
+                  const T* const rig_from_world,
+                  const T* const camera_params,
+                  const T* const refrac_params,
+                  T* residuals) const {
+    const Eigen::Matrix<T, 3, 1> point3D_in_cam =
+        EigenQuaternionMap<T>(cam_from_rig) *
+            (EigenQuaternionMap<T>(rig_from_world) *
+                 EigenVector3Map<T>(point3D_in_world) +
+             EigenVector3Map<T>(rig_from_world + 4)) +
+        EigenVector3Map<T>(cam_from_rig + 4);
+
+    Eigen::Map<Eigen::Matrix<T, 2, 1>> residuals_vec(residuals);
+    Eigen::Matrix<T, 2, 1> proj;
+    if (CameraRefracModel::template ImgFromCam<CameraModel>(camera_params,
+                                                            refrac_params,
+                                                            point3D_in_cam.x(),
+                                                            point3D_in_cam.y(),
+                                                            point3D_in_cam.z(),
+                                                            &proj.x(),
+                                                            &proj.y())) {
+      residuals_vec = proj - point2D_.cast<T>();
+    } else {
+      residuals_vec.setZero();
+    }
+    return true;
+  }
+
+ private:
+  const Eigen::Vector2d point2D_;
+};
+
+template <typename CameraRefracModel, typename CameraModel>
+class RigReprojErrorRefracConstantRigCostFunctor
+    : public AutoDiffCostFunctor<
+          RigReprojErrorRefracConstantRigCostFunctor<CameraRefracModel,
+                                                    CameraModel>,
+          2,
+          3,
+          7,
+          CameraModel::num_params,
+          CameraRefracModel::num_params> {
+ public:
+  RigReprojErrorRefracConstantRigCostFunctor(const Eigen::Vector2d& point2D,
+                                             const Rigid3d& cam_from_rig)
+      : cam_from_rig_(cam_from_rig), reproj_cost_(point2D) {}
+
+  static ceres::CostFunction* Create(const Eigen::Vector2d& point2D,
+                                     const Rigid3d& cam_from_rig) {
+    return new ceres::NumericDiffCostFunction<
+        RigReprojErrorRefracConstantRigCostFunctor,
+        ceres::CENTRAL,
+        2,
+        3,
+        7,
+        CameraModel::num_params,
+        CameraRefracModel::num_params>(
+        new RigReprojErrorRefracConstantRigCostFunctor(point2D, cam_from_rig));
+  }
+
+  template <typename T>
+  bool operator()(const T* const point3D_in_world,
+                  const T* const rig_from_world,
+                  const T* const camera_params,
+                  const T* const refrac_params,
+                  T* residuals) const {
+    const Eigen::Matrix<T, 7, 1> cam_from_rig = cam_from_rig_.params.cast<T>();
+    return reproj_cost_(point3D_in_world,
+                        cam_from_rig.data(),
+                        rig_from_world,
+                        camera_params,
+                        refrac_params,
+                        residuals);
+  }
+
+ private:
+  const Rigid3d cam_from_rig_;
+  const RigReprojErrorRefracCostFunctor<CameraRefracModel, CameraModel>
+      reproj_cost_;
+};
+
 template <template <typename> class CostFunctor, typename... Args>
 ceres::CostFunction* CreateCameraCostFunction(
     const CameraModelId camera_model_id, Args&&... args) {

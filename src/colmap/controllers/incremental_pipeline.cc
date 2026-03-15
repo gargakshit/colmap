@@ -72,14 +72,32 @@ DatabaseCache::Options CreateDatabaseCacheOptions(
   return database_cache_options;
 }
 
+void ApplyRefracBAFreezeIfNeeded(const IncrementalPipelineOptions& options,
+                                 const size_t num_reg_frames,
+                                 BundleAdjustmentOptions* ba_options) {
+  THROW_CHECK_NOTNULL(ba_options);
+  if (!options.enable_refraction || !ba_options->refine_refrac_params ||
+      options.ba_fix_refrac_params_until_num_images <= 0) {
+    return;
+  }
+
+  if (num_reg_frames <
+      static_cast<size_t>(options.ba_fix_refrac_params_until_num_images)) {
+    ba_options->refine_refrac_params = false;
+  }
+}
+
 void IterativeGlobalRefinement(const IncrementalPipelineOptions& options,
                                const IncrementalMapper::Options& mapper_options,
                                IncrementalMapper& mapper) {
   LOG(INFO) << "Retriangulation and Global bundle adjustment";
+  BundleAdjustmentOptions ba_options = options.GlobalBundleAdjustment();
+  ApplyRefracBAFreezeIfNeeded(
+      options, mapper.Reconstruction()->NumRegFrames(), &ba_options);
   mapper.IterativeGlobalRefinement(options.ba_global_max_refinements,
                                    options.ba_global_max_refinement_change,
                                    mapper_options,
-                                   options.GlobalBundleAdjustment(),
+                                   ba_options,
                                    options.Triangulation());
   mapper.FilterFrames(mapper_options);
 }
@@ -576,10 +594,13 @@ IncrementalPipeline::Status IncrementalPipeline::ReconstructSubModel(
       for (const data_t& data_id : image.FramePtr()->ImageIds()) {
         mapper.TriangulateImage(options_->Triangulation(), data_id.id);
       }
+      BundleAdjustmentOptions local_ba_options = options_->LocalBundleAdjustment();
+      ApplyRefracBAFreezeIfNeeded(
+          *options_, reconstruction->NumRegFrames(), &local_ba_options);
       mapper.IterativeLocalRefinement(options_->ba_local_max_refinements,
                                       options_->ba_local_max_refinement_change,
                                       mapper_options,
-                                      options_->LocalBundleAdjustment(),
+                                      local_ba_options,
                                       options_->Triangulation(),
                                       next_image_id);
 
@@ -767,10 +788,13 @@ void IncrementalPipeline::TriangulateReconstruction(
   }
 
   LOG(INFO) << "Retriangulation and Global bundle adjustment";
+  BundleAdjustmentOptions global_ba_options = options_->GlobalBundleAdjustment();
+  ApplyRefracBAFreezeIfNeeded(
+      *options_, reconstruction->NumRegFrames(), &global_ba_options);
   mapper.IterativeGlobalRefinement(options_->ba_global_max_refinements,
                                    options_->ba_global_max_refinement_change,
                                    options_->Mapper(),
-                                   options_->GlobalBundleAdjustment(),
+                                   global_ba_options,
                                    options_->Triangulation(),
                                    /*normalize_reconstruction=*/false);
   mapper.EndReconstruction(/*discard=*/false);

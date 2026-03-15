@@ -216,6 +216,7 @@ FeatureExtractionWidget::FeatureExtractionWidget(QWidget* parent,
   QGridLayout* grid = new QGridLayout(this);
 
   grid->addWidget(CreateCameraModelBox(), 0, 0);
+  grid->addWidget(CreateCameraRefracModelBox(), 1, 0);
 
   tab_widget_ = new QTabWidget(this);
 
@@ -273,6 +274,45 @@ QGroupBox* FeatureExtractionWidget::CreateCameraModelBox() {
   camera_params_text_ = new QLineEdit(this);
   camera_params_text_->setEnabled(false);
 
+  single_camera_cb_ = new QCheckBox("Shared for all images", this);
+  single_camera_cb_->setChecked(false);
+
+  single_camera_per_folder_cb_ = new QCheckBox("Shared per sub-folder", this);
+  single_camera_per_folder_cb_->setChecked(false);
+
+  QGroupBox* box = new QGroupBox(tr("Camera model"), this);
+
+  QVBoxLayout* vbox = new QVBoxLayout(box);
+  vbox->addWidget(camera_model_cb_);
+  vbox->addWidget(camera_params_info_);
+  vbox->addWidget(single_camera_cb_);
+  vbox->addWidget(single_camera_per_folder_cb_);
+  vbox->addWidget(camera_params_exif_rb_);
+  vbox->addWidget(camera_params_custom_rb_);
+  vbox->addWidget(camera_params_text_);
+  vbox->addStretch(1);
+
+  box->setLayout(vbox);
+
+  SelectCameraModel(camera_model_cb_->currentIndex());
+
+  connect(camera_model_cb_,
+          (void (QComboBox::*)(int))&QComboBox::currentIndexChanged,
+          this,
+          &FeatureExtractionWidget::SelectCameraModel);
+  connect(camera_params_exif_rb_,
+          &QRadioButton::clicked,
+          camera_params_text_,
+          &QLineEdit::setDisabled);
+  connect(camera_params_custom_rb_,
+          &QRadioButton::clicked,
+          camera_params_text_,
+          &QLineEdit::setEnabled);
+
+  return box;
+}
+
+QGroupBox* FeatureExtractionWidget::CreateCameraRefracModelBox() {
   camera_refrac_model_ids_.clear();
   camera_refrac_model_cb_ = new QComboBox(this);
   camera_refrac_model_cb_->addItem(QString::fromStdString("NONE"));
@@ -297,47 +337,19 @@ QGroupBox* FeatureExtractionWidget::CreateCameraModelBox() {
   camera_refrac_params_text_ = new QLineEdit(this);
   camera_refrac_params_text_->setEnabled(false);
 
-  single_camera_cb_ = new QCheckBox("Shared for all images", this);
-  single_camera_cb_->setChecked(false);
-
-  single_camera_per_folder_cb_ = new QCheckBox("Shared per sub-folder", this);
-  single_camera_per_folder_cb_->setChecked(false);
-
-  QGroupBox* box = new QGroupBox(tr("Camera model"), this);
-
+  QGroupBox* box = new QGroupBox(tr("Refractive camera model"), this);
   QVBoxLayout* vbox = new QVBoxLayout(box);
-  vbox->addWidget(camera_model_cb_);
-  vbox->addWidget(camera_params_info_);
   vbox->addWidget(camera_refrac_model_cb_);
   vbox->addWidget(camera_refrac_params_info_);
-  vbox->addWidget(single_camera_cb_);
-  vbox->addWidget(single_camera_per_folder_cb_);
-  vbox->addWidget(camera_params_exif_rb_);
-  vbox->addWidget(camera_params_custom_rb_);
-  vbox->addWidget(camera_params_text_);
   vbox->addWidget(camera_refrac_params_text_);
   vbox->addStretch(1);
 
   box->setLayout(vbox);
 
-  SelectCameraModel(camera_model_cb_->currentIndex());
-
-  connect(camera_model_cb_,
-          (void (QComboBox::*)(int))&QComboBox::currentIndexChanged,
-          this,
-          &FeatureExtractionWidget::SelectCameraModel);
   connect(camera_refrac_model_cb_,
           (void (QComboBox::*)(int))&QComboBox::currentIndexChanged,
           this,
           &FeatureExtractionWidget::SelectCameraRefracModel);
-  connect(camera_params_exif_rb_,
-          &QRadioButton::clicked,
-          camera_params_text_,
-          &QLineEdit::setDisabled);
-  connect(camera_params_custom_rb_,
-          &QRadioButton::clicked,
-          camera_params_text_,
-          &QLineEdit::setEnabled);
 
   SelectCameraRefracModel(camera_refrac_model_cb_->currentIndex());
 

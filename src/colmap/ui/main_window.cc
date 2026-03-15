@@ -1364,7 +1364,8 @@ void MainWindow::ReconstructionNormalize() {
     return;
   }
   action_reconstruction_step_->setEnabled(false);
-  reconstruction_manager_->Get(SelectedReconstructionIdx())->Normalize();
+  reconstruction_manager_->Get(SelectedReconstructionIdx())
+      ->Normalize(/*fixed_scale=*/options_.mapper->enable_refraction);
   action_reconstruction_step_->setEnabled(true);
 }
 

@@ -576,6 +576,8 @@ void OptionManager::AddMapperOptions() {
                    &mapper->ba_refine_extra_params);
   AddDefaultOption("Mapper.ba_refine_refrac_params",
                    &mapper->ba_refine_refrac_params);
+  AddDefaultOption("Mapper.ba_fix_refrac_params_until_num_images",
+                   &mapper->ba_fix_refrac_params_until_num_images);
   AddDefaultOption("Mapper.ba_refine_sensor_from_rig",
                    &mapper->ba_refine_sensor_from_rig);
   AddDefaultOption("Mapper.ba_local_function_tolerance",

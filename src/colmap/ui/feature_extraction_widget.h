@@ -49,6 +49,7 @@ class FeatureExtractionWidget : public QWidget {
   void WriteOptions();
 
   QGroupBox* CreateCameraModelBox();
+  QGroupBox* CreateCameraRefracModelBox();
 
   void SelectCameraModel(int code);
   void SelectCameraRefracModel(int code);

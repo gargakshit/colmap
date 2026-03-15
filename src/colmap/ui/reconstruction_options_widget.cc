@@ -139,6 +139,9 @@ class MapperBundleAdjustmentOptionsWidget : public OptionsWidget {
                   "refine_extra_params");
     AddOptionBool(&options->mapper->ba_refine_refrac_params,
                   "refine_refrac_params");
+    AddOptionInt(&options->mapper->ba_fix_refrac_params_until_num_images,
+                 "fix_refrac_params_until_num_images",
+                 -1);
     AddOptionBool(&options->mapper->ba_refine_sensor_from_rig,
                   "refine_sensor_from_rig");
 

@@ -119,7 +119,12 @@ void BundleAdjustmentWidget::Run() {
 
   // Normalize scene for numerical stability and
   // to avoid large scale changes in viewer.
-  reconstruction_->Normalize();
+  reconstruction_->Normalize(
+      /*fixed_scale=*/options_->bundle_adjustment->enable_refraction,
+      0.1,
+      0.9,
+      true,
+      options_->bundle_adjustment->enable_refraction);
 
   thread_control_widget_->StartThread(
       "Bundle adjusting...", true, std::move(thread));
